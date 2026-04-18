@@ -1,4 +1,3 @@
-```markdown
 # 🌍 GeoScope Analytics
 
 A modern WebGIS application for environmental analysis at catchment level.
