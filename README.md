@@ -1,8 +1,3 @@
-Got it — you want a **clean, fully consistent README in one markdown block** (no broken formatting).
-Here it is, ready to copy 👇
-
----
-
 ```markdown
 # 🌍 GeoScope Analytics
 
