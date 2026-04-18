@@ -67,5 +67,9 @@ project/
 ```bash
 cd backend
 python api.py
+### 2. Run Frontend
 cd frontend
 python -m http.server 8000
+### 3. Open in Browser
+http://localhost:8000
+
