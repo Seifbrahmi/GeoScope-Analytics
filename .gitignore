@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Data (too heavy)
+data/
+outputs/
+
+# System files
+.DS_Store

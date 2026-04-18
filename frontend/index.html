@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoScope Analytics</title>
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin=""
+    >
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div class="hero-copy">
+                <h1>GeoScope Analytics</h1>
+                <p>Environmental analysis of wildfire, rainfall, and land cover through a modern catchment-scale WebGIS.</p>
+            </div>
+        </header>
+
+        <main class="dashboard">
+            <section class="map-stage">
+                <div class="section-title">
+                    <h2>Map View</h2>
+                    <p>Explore catchments spatially and select them directly from the map.</p>
+                </div>
+                <div id="map"></div>
+
+                <aside class="control-panel glass-card">
+                    <div class="panel-head">
+                        <h2>Analysis Controls</h2>
+                        <p>Choose a catchment and date window, then run the analysis.</p>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="catchmentSelect"><span class="field-icon">◎</span>Catchment</label>
+                        <select id="catchmentSelect">
+                            <option value="">Loading catchments...</option>
+                        </select>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="start-date"><span class="field-icon">◷</span>Start date</label>
+                        <input id="start-date" type="date">
+                    </div>
+
+                    <div class="field-group">
+                        <label for="end-date"><span class="field-icon">◴</span>End date</label>
+                        <input id="end-date" type="date">
+                    </div>
+
+                    <button id="run-analysis" class="run-button">Run Analysis</button>
+
+                    <div class="status-card">
+                        <span class="status-dot"></span>
+                        <p id="status-message">Choose filters and run the analysis.</p>
+                    </div>
+                </aside>
+            </section>
+
+            <section class="results-shell glass-card">
+                <div class="results-header">
+                    <div>
+                        <h2>Analysis Results</h2>
+                        <p>Review key indicators, trends, and detailed records for the active selection.</p>
+                    </div>
+                    <button id="export-csv" class="export-button" type="button">⭳ Export CSV</button>
+                </div>
+
+                <div class="tab-bar" role="tablist">
+                    <button class="tab-button active" data-tab="summary" type="button">Summary</button>
+                    <button class="tab-button" data-tab="chart" type="button">Chart</button>
+                    <button class="tab-button" data-tab="table" type="button">Table</button>
+                </div>
+
+                <div class="tab-panel active" id="tab-summary">
+                    <div class="kpi-grid">
+                        <article class="kpi-card">
+                            <span class="kpi-label">Average Burned Area</span>
+                            <strong id="avg-burned-area">--</strong>
+                            <small>m² across selected records</small>
+                        </article>
+                        <article class="kpi-card">
+                            <span class="kpi-label">Average Rainfall</span>
+                            <strong id="avg-rainfall">--</strong>
+                            <small>mm across selected records</small>
+                        </article>
+                        <article class="kpi-card">
+                            <span class="kpi-label">Dominant Land Cover</span>
+                            <strong id="dominant-land-cover">--</strong>
+                            <small>Primary cover type in the selected catchment</small>
+                        </article>
+                    </div>
+                </div>
+
+                <div class="tab-panel" id="tab-chart">
+                    <div class="chart-wrap">
+                        <canvas id="results-chart"></canvas>
+                    </div>
+                </div>
+
+                <div class="tab-panel" id="tab-table">
+                    <div id="table-container" class="table-container">
+                        <p class="placeholder">Results will appear here.</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script
+        src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""
+    ></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
