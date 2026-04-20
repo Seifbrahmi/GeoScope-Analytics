@@ -87,21 +87,32 @@ def extract_land_cover(catchments: gpd.GeoDataFrame, catchment_id: int) -> float
     return unique[np.argmax(counts)]
 
 
+def load_catchments() -> gpd.GeoDataFrame:
+    catchments = gpd.read_file(CATCHMENTS_PATH)
+    catchments = catchments.cx[-170:-50, 10:80]
+    return catchments.to_crs(epsg=6933)
+
+
+def build_land_cover_lookup(catchments: gpd.GeoDataFrame | None = None) -> dict[int, float]:
+    if catchments is None:
+        catchments = load_catchments()
+
+    print("Computing dominant land cover per catchment...")
+    return {
+        idx: extract_land_cover(catchments, idx) for idx in catchments.index
+    }
+
+
 def main():
     print("Starting spatial aggregation...")
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     # load catchments (metric CRS)
-    catchments = gpd.read_file(CATCHMENTS_PATH)
-    catchments = catchments.cx[-170:-50, 10:80]
-    catchments = catchments.to_crs(epsg=6933)
+    catchments = load_catchments()
     print(f"Number of catchments being processed: {len(catchments)}")
 
-    print("Computing dominant land cover per catchment...")
-    land_cover_by_catchment = {
-        idx: extract_land_cover(catchments, idx) for idx in catchments.index
-    }
+    land_cover_by_catchment = build_land_cover_lookup(catchments)
 
     raster_files = sorted([f for f in RASTER_DIR.glob("*.tif") if "-JD.tif" in f.name])
     print(f"Number of JD raster files: {len(raster_files)}")
@@ -182,6 +193,8 @@ def main():
     df.to_csv(OUTPUT_PATH, index=False)
 
     print("\nDone!")
+    print("Columns:", df.columns.tolist())
+    print(df.head())
     print(f"Results saved to: {OUTPUT_PATH}")
 
 
