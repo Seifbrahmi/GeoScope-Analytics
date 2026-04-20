@@ -8,27 +8,81 @@ var catchmentsLayer = null;
 var resultsChart = null;
 var activeCatchmentId = null;
 var currentResults = [];
+var currentRequestId = 0;
+var catchmentIdByOutlet = {};
+var landCoverByCatchment = {};
 var landcoverOverlay = null;
+var burnedAreaOverlay = null;
+var burnedAreaOverlayData = null;
+var burnedAreaLegend = null;
+var hasCompletedAnalysis = false;
 
+var appShell = document.querySelector(".app-shell");
+var controlPanel = document.getElementById("control-panel");
+var toggleControlsButton = document.getElementById("toggle-controls");
 var catchmentSelect = document.getElementById("catchmentSelect");
 var startDateInput = document.getElementById("start-date");
 var endDateInput = document.getElementById("end-date");
 var runButton = document.getElementById("run-analysis");
+var resetAnalysisButton = document.getElementById("reset-analysis");
+var burnedOverlayToggle = document.getElementById("toggle-burned-overlay");
 var exportButton = document.getElementById("export-csv");
+var closeResultsButton = document.getElementById("close-results");
+var resultsBackdrop = document.getElementById("results-backdrop");
+var showMapButton = document.getElementById("show-map");
+var showResultsButton = document.getElementById("show-results");
+var tableContainer = document.getElementById("table-container");
+var resultsChartCanvas = document.getElementById("results-chart");
+var resultsShell = document.getElementById("results-drawer");
 var avgBurnedArea = document.getElementById("avg-burned-area");
 var avgRainfall = document.getElementById("avg-rainfall");
 var dominantLandCover = document.getElementById("dominant-land-cover");
+var quickCatchment = document.getElementById("quick-catchment");
+var quickWindow = document.getElementById("quick-window");
+var quickRecords = document.getElementById("quick-records");
+var statusDot = document.querySelector(".status-dot");
+var chartTextColor = "#6b7280";
+var chartGridColor = "rgba(203, 213, 225, 0.65)";
+var chartFontFamily = "\"Manrope\", \"Segoe UI\", sans-serif";
 
 var landCoverMap = {
-    1: "Forest",
-    2: "Cropland",
-    3: "Urban"
+    10: "Tree cover",
+    20: "Shrubland",
+    30: "Grassland",
+    40: "Cropland",
+    50: "Built-up",
+    60: "Bare / sparse vegetation",
+    70: "Snow and ice",
+    80: "Permanent water bodies",
+    90: "Herbaceous wetland",
+    95: "Mangroves",
+    100: "Moss and lichen"
+};
+
+var landCoverColors = {
+    10: "#2e7d32",
+    20: "#4d7c0f",
+    30: "#84cc16",
+    40: "#f9a825",
+    50: "#616161",
+    60: "#c2a878",
+    70: "#dbeafe",
+    80: "#42a5f5",
+    90: "#14b8a6",
+    95: "#0f766e",
+    100: "#8d99ae"
 };
 
 function setStatus(message, isError) {
     var status = document.getElementById("status-message");
     status.textContent = message;
-    status.style.color = isError ? "#ff7a90" : "#98abc7";
+    status.style.color = isError ? "#dc2626" : "#52606d";
+    if (statusDot) {
+        statusDot.style.background = isError ? "#dc2626" : "#10b981";
+        statusDot.style.boxShadow = isError
+            ? "0 0 0 6px rgba(220, 38, 38, 0.12)"
+            : "0 0 0 6px rgba(16, 185, 129, 0.12)";
+    }
 }
 
 function setLoadingState(isLoading) {
@@ -36,43 +90,215 @@ function setLoadingState(isLoading) {
     runButton.textContent = isLoading ? "Running..." : "Run Analysis";
 }
 
-function getFeatureCatchmentId(feature) {
-    return feature.properties.Outlet_id || feature.properties.Hylak_id || feature.properties.fid;
+function setResetButtonVisible(isVisible) {
+    if (!resetAnalysisButton) {
+        return;
+    }
+
+    resetAnalysisButton.classList.toggle("is-hidden", !isVisible);
 }
 
-function getDefaultStyle() {
+function animateResultsShell() {
+    if (!resultsShell) {
+        return;
+    }
+
+    resultsShell.classList.remove("is-refreshed");
+    void resultsShell.offsetWidth;
+    resultsShell.classList.add("is-refreshed");
+}
+
+function formatDateWindow() {
+    if (startDateInput.value && endDateInput.value) {
+        return startDateInput.value + " to " + endDateInput.value;
+    }
+
+    if (startDateInput.value) {
+        return "From " + startDateInput.value;
+    }
+
+    if (endDateInput.value) {
+        return "Until " + endDateInput.value;
+    }
+
+    return "--";
+}
+
+function updateQuickStats(recordCount) {
+    if (quickCatchment) {
+        quickCatchment.textContent = catchmentSelect.value || "--";
+    }
+
+    if (quickWindow) {
+        quickWindow.textContent = formatDateWindow();
+    }
+
+    if (!quickRecords) {
+        return;
+    }
+
+    if (recordCount === null) {
+        quickRecords.textContent = "--";
+        return;
+    }
+
+    if (typeof recordCount === "number") {
+        quickRecords.textContent = String(recordCount);
+        return;
+    }
+
+    quickRecords.textContent = currentResults.length ? String(currentResults.length) : "--";
+}
+
+function setControlsCollapsed(isCollapsed) {
+    if (!controlPanel || !toggleControlsButton) {
+        return;
+    }
+
+    controlPanel.classList.toggle("is-collapsed", isCollapsed);
+    controlPanel.setAttribute("aria-expanded", String(!isCollapsed));
+    toggleControlsButton.setAttribute("aria-expanded", String(!isCollapsed));
+    toggleControlsButton.textContent = isCollapsed ? "Show" : "Hide";
+
+    window.setTimeout(function () {
+        map.invalidateSize();
+    }, 220);
+}
+
+function setResultsPanelOpen(isOpen) {
+    if (!appShell || !resultsShell) {
+        return;
+    }
+
+    appShell.classList.toggle("is-results-open", isOpen);
+    resultsShell.setAttribute("aria-hidden", String(!isOpen));
+
+    if (showMapButton) {
+        showMapButton.classList.toggle("is-active", !isOpen);
+    }
+
+    if (showResultsButton) {
+        showResultsButton.classList.toggle("is-active", isOpen);
+    }
+
+    window.setTimeout(function () {
+        if (isOpen && resultsChart) {
+            resultsChart.resize();
+            return;
+        }
+
+        map.invalidateSize();
+    }, 260);
+}
+
+function getMapFitOptions() {
+    var rightPadding = 24;
+
+    if (appShell && appShell.classList.contains("is-results-open") && window.innerWidth > 760) {
+        rightPadding = Math.min(window.innerWidth * 0.38, 540) + 40;
+    }
+
     return {
-        color: "rgba(188, 201, 219, 0.45)",
-        weight: 1,
-        fillColor: "#9aa5b1",
-        fillOpacity: 0.12
+        paddingTopLeft: [32, 100],
+        paddingBottomRight: [rightPadding, 48]
     };
 }
 
-function getHoverStyle() {
+function getFeatureCatchmentId(feature) {
+    if (!feature || !feature.properties) {
+        return null;
+    }
+
+    if (feature.properties.catchment_id !== undefined && feature.properties.catchment_id !== null && feature.properties.catchment_id !== "") {
+        return String(feature.properties.catchment_id);
+    }
+
+    if (feature.properties.Outlet_id !== undefined && feature.properties.Outlet_id !== null) {
+        return catchmentIdByOutlet[String(feature.properties.Outlet_id)] || null;
+    }
+
+    return null;
+}
+
+function getLandCoverValue(value) {
+    if (value === undefined || value === null) {
+        return null;
+    }
+
+    if (typeof value === "string" && value.trim() === "") {
+        return null;
+    }
+
+    var landCoverValue = Number(value);
+    return isNaN(landCoverValue) ? null : landCoverValue;
+}
+
+function getLandCoverLabel(value) {
+    var landCoverValue = getLandCoverValue(value);
+    return landCoverValue === null ? "Unknown" : (landCoverMap[landCoverValue] || "Unknown");
+}
+
+function logLandCoverValues(data) {
+    var uniqueLandCoverValues = data
+        .map(function (row) {
+            return getLandCoverValue(row.land_cover);
+        })
+        .filter(function (value, index, values) {
+            return value !== null && values.indexOf(value) === index;
+        })
+        .sort(function (a, b) {
+            return a - b;
+        });
+
+    console.log("Unique land_cover values from API response:", uniqueLandCoverValues);
+
+    var unmappedLandCoverValues = uniqueLandCoverValues.filter(function (value) {
+        return !Object.prototype.hasOwnProperty.call(landCoverMap, value);
+    });
+
+    if (unmappedLandCoverValues.length) {
+        console.warn("Unmapped land_cover values:", unmappedLandCoverValues);
+    }
+}
+
+function getCatchmentFillColor(feature) {
+    var landCoverValue = getLandCoverValue(feature.properties.land_cover);
+    return landCoverColors[landCoverValue] || "#999";
+}
+
+function getFeatureStyle(feature) {
+    return {
+        color: "#334155",
+        weight: 1.1,
+        fillColor: getCatchmentFillColor(feature),
+        fillOpacity: 0.48
+    };
+}
+
+function getHoverStyle(feature) {
     return {
         color: "#7ce8ce",
         weight: 2,
-        fillColor: "#7ce8ce",
-        fillOpacity: 0.2
+        fillColor: getCatchmentFillColor(feature),
+        fillOpacity: 0.68
     };
 }
 
-function getSelectedStyle() {
+function getSelectedStyle(feature) {
     return {
         color: "#ff916b",
         weight: 3,
-        fillColor: "#ff916b",
-        fillOpacity: 0.34
+        fillColor: getCatchmentFillColor(feature),
+        fillOpacity: 0.84
     };
 }
 
 function resetLayerStyle(layer) {
     var id = getFeatureCatchmentId(layer.feature);
     if (String(id) === String(activeCatchmentId)) {
-        layer.setStyle(getSelectedStyle());
+        layer.setStyle(getSelectedStyle(layer.feature));
     } else {
-        layer.setStyle(getDefaultStyle());
+        layer.setStyle(getFeatureStyle(layer.feature));
     }
 }
 
@@ -84,42 +310,47 @@ function highlightCatchment(id) {
 
     catchmentsLayer.eachLayer(function (layer) {
         if (String(getFeatureCatchmentId(layer.feature)) === String(id)) {
-            layer.setStyle(getSelectedStyle());
-            map.fitBounds(layer.getBounds(), { padding: [24, 24] });
+            layer.setStyle(getSelectedStyle(layer.feature));
+            map.fitBounds(layer.getBounds(), getMapFitOptions());
+
+            if (layer.getTooltip()) {
+                layer.openTooltip();
+                window.setTimeout(function () {
+                    if (layer.getTooltip()) {
+                        layer.closeTooltip();
+                    }
+                }, 1200);
+            }
         } else {
-            layer.setStyle(getDefaultStyle());
+            layer.setStyle(getFeatureStyle(layer.feature));
         }
     });
 }
 
 function renderTable(data) {
-    var container = document.getElementById("table-container");
-
     if (!data.length) {
-        container.innerHTML = '<p class="placeholder">No results returned for the selected filters.</p>';
+        tableContainer.innerHTML = '<p class="placeholder">No results returned for the selected filters.</p>';
         return;
     }
 
-    var formattedData = data.map(function (row) {
-        var formattedRow = Object.assign({}, row);
-        if (formattedRow.land_cover !== undefined && formattedRow.land_cover !== null && formattedRow.land_cover !== "") {
-            formattedRow.land_cover = landCoverMap[Number(formattedRow.land_cover)] || formattedRow.land_cover;
-        }
-        return formattedRow;
-    });
-
-    var columns = Object.keys(formattedData[0]);
+    var columns = Object.keys(data[0]);
     var header = columns.map(function (column) {
         return "<th>" + column + "</th>";
     }).join("");
 
-    var rows = formattedData.map(function (row) {
+    var rows = data.map(function (row) {
         return "<tr>" + columns.map(function (column) {
-            return "<td>" + row[column] + "</td>";
+            var value = row[column];
+            if (column === "land_cover") {
+                value = getLandCoverLabel(value);
+            } else if (value === undefined || value === null || value === "") {
+                value = "--";
+            }
+            return "<td>" + value + "</td>";
         }).join("") + "</tr>";
     }).join("");
 
-    container.innerHTML =
+    tableContainer.innerHTML =
         "<table><thead><tr>" + header + "</tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
@@ -142,18 +373,30 @@ function updateSummary(data) {
     avgBurnedArea.textContent = burnedAreaMean.toFixed(2);
     avgRainfall.textContent = rainfallMean.toFixed(3);
 
-    var landCoverValue = data.find(function (row) {
-        return row.land_cover !== undefined && row.land_cover !== null && row.land_cover !== "";
+    var landCoverCounts = {};
+
+    data.forEach(function (row) {
+        var landCoverValue = getLandCoverValue(row.land_cover);
+        if (landCoverValue === null) {
+            return;
+        }
+        landCoverCounts[landCoverValue] = (landCoverCounts[landCoverValue] || 0) + 1;
     });
-    if (landCoverValue) {
-        dominantLandCover.textContent = landCoverMap[Number(landCoverValue.land_cover)] || landCoverValue.land_cover;
-    } else {
-        dominantLandCover.textContent = "N/A";
-    }
+
+    var dominantLandCoverId = Object.keys(landCoverCounts).reduce(function (bestId, currentId) {
+        if (!bestId || landCoverCounts[currentId] > landCoverCounts[bestId]) {
+            return currentId;
+        }
+        return bestId;
+    }, null);
+
+    dominantLandCover.textContent = dominantLandCoverId
+        ? getLandCoverLabel(dominantLandCoverId)
+        : "N/A";
 }
 
 function renderChart(data) {
-    var ctx = document.getElementById("results-chart").getContext("2d");
+    var ctx = resultsChartCanvas.getContext("2d");
     var labels = data.map(function (row) {
         return row.date;
     });
@@ -178,9 +421,9 @@ function renderChart(data) {
                 {
                     label: "Burned Area",
                     data: burnedArea,
-                    borderColor: "#ff9f6e",
-                    backgroundColor: "rgba(255, 159, 110, 0.14)",
-                    borderWidth: 2.5,
+                    borderColor: "#f97316",
+                    backgroundColor: "rgba(249, 115, 22, 0.12)",
+                    borderWidth: 3,
                     pointRadius: 2,
                     pointHoverRadius: 5,
                     tension: 0.35,
@@ -189,9 +432,9 @@ function renderChart(data) {
                 {
                     label: "Rainfall",
                     data: rainfall,
-                    borderColor: "#4fd1c5",
-                    backgroundColor: "rgba(79, 209, 197, 0.14)",
-                    borderWidth: 2.5,
+                    borderColor: "#10b981",
+                    backgroundColor: "rgba(16, 185, 129, 0.12)",
+                    borderWidth: 3,
                     pointRadius: 2,
                     pointHoverRadius: 5,
                     tension: 0.35,
@@ -203,7 +446,7 @@ function renderChart(data) {
             responsive: true,
             maintainAspectRatio: false,
             animation: {
-                duration: 500
+                duration: 450
             },
             interaction: {
                 mode: "index",
@@ -213,10 +456,15 @@ function renderChart(data) {
                 y: {
                     position: "left",
                     grid: {
-                        color: "rgba(255,255,255,0.08)"
+                        color: chartGridColor
                     },
                     ticks: {
-                        color: "#eef5ff"
+                        color: chartTextColor,
+                        font: {
+                            family: chartFontFamily,
+                            size: 11,
+                            weight: 600
+                        }
                     }
                 },
                 y1: {
@@ -225,22 +473,41 @@ function renderChart(data) {
                         drawOnChartArea: false
                     },
                     ticks: {
-                        color: "#eef5ff"
+                        color: chartTextColor,
+                        font: {
+                            family: chartFontFamily,
+                            size: 11,
+                            weight: 600
+                        }
                     }
                 },
                 x: {
                     grid: {
-                        color: "rgba(255,255,255,0.08)"
+                        color: chartGridColor
                     },
                     ticks: {
-                        color: "#eef5ff"
+                        color: chartTextColor,
+                        maxRotation: 0,
+                        font: {
+                            family: chartFontFamily,
+                            size: 11,
+                            weight: 600
+                        }
                     }
                 }
             },
             plugins: {
                 legend: {
                     labels: {
-                        color: "#eef5ff"
+                        color: chartTextColor,
+                        usePointStyle: true,
+                        boxWidth: 10,
+                        padding: 14,
+                        font: {
+                            family: chartFontFamily,
+                            size: 11,
+                            weight: 700
+                        }
                     }
                 }
             }
@@ -248,11 +515,141 @@ function renderChart(data) {
     });
 }
 
-function renderResults(data) {
+function removeBurnedAreaOverlay() {
+    if (burnedAreaOverlay) {
+        map.removeLayer(burnedAreaOverlay);
+        burnedAreaOverlay = null;
+    }
+
+    if (burnedAreaLegend) {
+        map.removeControl(burnedAreaLegend);
+        burnedAreaLegend = null;
+    }
+}
+
+function addBurnedAreaLegend(legendConfig) {
+    if (!legendConfig || legendConfig.has_data === false) {
+        return;
+    }
+
+    burnedAreaLegend = L.control({ position: legendConfig.position || "bottomright" });
+
+    burnedAreaLegend.onAdd = function () {
+        var div = L.DomUtil.create("div", "legend burned-legend");
+        var colors = Array.isArray(legendConfig.colors) && legendConfig.colors.length
+            ? legendConfig.colors
+            : ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"];
+        div.innerHTML =
+            '<div class="burned-legend-title">' + (legendConfig.title || "Burned Area Intensity") + "</div>" +
+            '<div class="burned-legend-scale" style="background:linear-gradient(90deg, ' + colors.join(", ") + ');"></div>' +
+            '<div class="burned-legend-labels"><span>' +
+            (legendConfig.min_label || "Low") +
+            "</span><span>" +
+            (legendConfig.max_label || "High") +
+            "</span></div>";
+        return div;
+    };
+
+    burnedAreaLegend.addTo(map);
+    window.setTimeout(function () {
+        var element = burnedAreaLegend && burnedAreaLegend.getContainer ? burnedAreaLegend.getContainer() : null;
+        if (element) {
+            element.classList.add("is-visible");
+        }
+    }, 20);
+}
+
+function syncBurnedAreaOverlay() {
+    removeBurnedAreaOverlay();
+
+    if (!burnedAreaOverlayData || !burnedOverlayToggle || !burnedOverlayToggle.checked || !hasCompletedAnalysis) {
+        return;
+    }
+
+    burnedAreaOverlay = L.imageOverlay(
+        burnedAreaOverlayData.image_url,
+        burnedAreaOverlayData.bounds,
+        {
+            opacity: 0,
+            interactive: false,
+            crossOrigin: true,
+            className: "burned-area-overlay"
+        }
+    );
+
+    burnedAreaOverlay.once("load", function () {
+        burnedAreaOverlay.setOpacity(burnedAreaOverlayData.opacity || 0.82);
+    });
+
+    burnedAreaOverlay.addTo(map);
+    if (burnedAreaOverlayData.has_burned_data && burnedAreaOverlayData.legend) {
+        var legendConfig = Object.assign({}, burnedAreaOverlayData.legend, {
+            has_data: burnedAreaOverlayData.has_burned_data
+        });
+        addBurnedAreaLegend(legendConfig);
+    }
+}
+
+function resetResults(shouldInvalidateRequest) {
+    if (shouldInvalidateRequest !== false) {
+        currentRequestId += 1;
+    }
+
+    currentResults = [];
+    hasCompletedAnalysis = false;
+    burnedAreaOverlayData = null;
+    removeBurnedAreaOverlay();
+    tableContainer.innerHTML = '<p class="placeholder">Results will appear here.</p>';
+    updateSummary([]);
+
+    if (resultsChart) {
+        resultsChart.destroy();
+        resultsChart = null;
+    }
+
+    exportButton.disabled = true;
+    setResetButtonVisible(false);
+    updateQuickStats(null);
+    setResultsPanelOpen(false);
+}
+
+function renderResults(data, overlay) {
     currentResults = data.slice();
+    hasCompletedAnalysis = true;
+    burnedAreaOverlayData = overlay || null;
+    setResetButtonVisible(true);
+    syncBurnedAreaOverlay();
+    animateResultsShell();
+    logLandCoverValues(data);
     updateSummary(data);
     renderChart(data);
     renderTable(data);
+    updateQuickStats(data.length);
+    setResultsPanelOpen(true);
+}
+
+function resetAnalysisUiState() {
+    resetResults();
+
+    if (catchmentSelect.value && startDateInput.value && endDateInput.value) {
+        highlightCatchment(catchmentSelect.value);
+        setStatus("Analysis reset. Run analysis to load a new burned-area overlay.", false);
+        return;
+    }
+
+    if (catchmentSelect.value) {
+        highlightCatchment(catchmentSelect.value);
+        setStatus("Analysis reset. Choose dates and run analysis again.", false);
+        return;
+    }
+
+    activeCatchmentId = null;
+    if (catchmentsLayer) {
+        catchmentsLayer.eachLayer(function (layer) {
+            layer.setStyle(getFeatureStyle(layer.feature));
+        });
+    }
+    setStatus("Choose filters and run the analysis.", false);
 }
 
 function exportResultsAsCsv() {
@@ -264,7 +661,7 @@ function exportResultsAsCsv() {
     var exportRows = currentResults.map(function (row) {
         var formattedRow = Object.assign({}, row);
         if (formattedRow.land_cover !== undefined && formattedRow.land_cover !== null && formattedRow.land_cover !== "") {
-            formattedRow.land_cover = landCoverMap[Number(formattedRow.land_cover)] || formattedRow.land_cover;
+            formattedRow.land_cover = getLandCoverLabel(formattedRow.land_cover);
         }
         return formattedRow;
     });
@@ -300,9 +697,17 @@ function addLegend() {
         var div = L.DomUtil.create("div", "info legend");
         div.innerHTML =
             "<b>Land Cover</b><br>" +
-            '<i style="background:#22c55e"></i> Forest<br>' +
-            '<i style="background:#facc15"></i> Cropland<br>' +
-            '<i style="background:#94a3b8"></i> Urban<br>';
+            '<i style="background:#2e7d32"></i> Tree cover<br>' +
+            '<i style="background:#4d7c0f"></i> Shrubland<br>' +
+            '<i style="background:#84cc16"></i> Grassland<br>' +
+            '<i style="background:#f9a825"></i> Cropland<br>' +
+            '<i style="background:#616161"></i> Built-up<br>' +
+            '<i style="background:#c2a878"></i> Bare / sparse vegetation<br>' +
+            '<i style="background:#dbeafe"></i> Snow and ice<br>' +
+            '<i style="background:#42a5f5"></i> Permanent water bodies<br>' +
+            '<i style="background:#14b8a6"></i> Herbaceous wetland<br>' +
+            '<i style="background:#0f766e"></i> Mangroves<br>' +
+            '<i style="background:#8d99ae"></i> Moss and lichen<br>';
         return div;
     };
 
@@ -317,15 +722,56 @@ function addLandcoverOverlay() {
     landcoverOverlay.addTo(map);
 }
 
-function loadCatchmentsGeoJSON() {
-    fetch("data/catchments.geojson")
+function loadLandCoverLookup() {
+    return fetch("http://127.0.0.1:5000/land-cover")
         .then(function (response) {
             if (!response.ok) {
-                throw new Error("Failed to fetch GeoJSON");
+                throw new Error("Failed to fetch land cover lookup");
             }
-            return response.text();
+            return response.json();
         })
-        .then(function (text) {
+        .then(function (lookup) {
+            landCoverByCatchment = lookup || {};
+        })
+        .catch(function (error) {
+            console.warn("Land cover lookup unavailable:", error);
+            landCoverByCatchment = {};
+        });
+}
+
+function loadCatchmentIdMap() {
+    return fetch("data/catchment-id-map.json")
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error("Failed to fetch catchment ID map");
+            }
+            return response.json();
+        })
+        .then(function (lookup) {
+            catchmentIdByOutlet = lookup || {};
+        })
+        .catch(function (error) {
+            console.error("Catchment ID map unavailable:", error);
+            catchmentIdByOutlet = {};
+            throw error;
+        });
+}
+
+function loadCatchmentsGeoJSON() {
+    Promise.all([
+        fetch("data/catchments.geojson")
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error("Failed to fetch GeoJSON");
+                }
+                return response.text();
+            }),
+        loadLandCoverLookup(),
+        loadCatchmentIdMap()
+    ])
+        .then(function (results) {
+            var text = results[0];
+
             if (!text || text.length < 10) {
                 throw new Error("GeoJSON file is empty or invalid");
             }
@@ -341,12 +787,35 @@ function loadCatchmentsGeoJSON() {
                 throw new Error("No features found in GeoJSON");
             }
 
+            data.features.forEach(function (feature) {
+                var outletId = feature.properties.Outlet_id;
+                var catchmentId = outletId !== undefined && outletId !== null
+                    ? catchmentIdByOutlet[String(outletId)]
+                    : null;
+
+                feature.properties.catchment_id = catchmentId || null;
+                feature.properties.land_cover = catchmentId ? landCoverByCatchment[String(catchmentId)] : undefined;
+            });
+
             catchmentsLayer = L.geoJSON(data, {
-                style: getDefaultStyle,
+                style: function (feature) {
+                    return getFeatureStyle(feature);
+                },
                 onEachFeature: function (feature, layer) {
+                    var id = getFeatureCatchmentId(feature);
+
+                    if (id) {
+                        layer.bindTooltip("Catchment " + id, {
+                            direction: "top",
+                            sticky: true,
+                            className: "catchment-tooltip",
+                            opacity: 1
+                        });
+                    }
+
                     layer.on("mouseover", function () {
                         if (String(getFeatureCatchmentId(feature)) !== String(activeCatchmentId)) {
-                            layer.setStyle(getHoverStyle());
+                            layer.setStyle(getHoverStyle(feature));
                         }
                         if (layer._path) {
                             layer._path.style.cursor = "pointer";
@@ -358,9 +827,16 @@ function loadCatchmentsGeoJSON() {
                     });
 
                     layer.on("click", function () {
-                        var id = getFeatureCatchmentId(feature);
-                        catchmentSelect.value = id;
-                        highlightCatchment(id);
+                        var selectedId = getFeatureCatchmentId(feature);
+                        if (!selectedId) {
+                            setStatus("This map catchment does not have a matching dataset ID.", true);
+                            return;
+                        }
+
+                        catchmentSelect.value = selectedId;
+                        resetResults();
+                        highlightCatchment(selectedId);
+                        updateQuickStats(null);
                         setStatus("Catchment selected from the map. Run analysis when ready.", false);
                     });
                 }
@@ -371,13 +847,15 @@ function loadCatchmentsGeoJSON() {
 
             data.features.forEach(function (feature) {
                 var id = getFeatureCatchmentId(feature);
-                if (id !== undefined && !seen[id]) {
+                if (id && !seen[id]) {
                     seen[id] = true;
                     options.push('<option value="' + id + '">' + id + "</option>");
                 }
             });
 
             catchmentSelect.innerHTML = options.join("");
+            resetResults();
+            updateQuickStats(null);
             setStatus("Catchments loaded. Select one and run analysis.", false);
         })
         .catch(function (error) {
@@ -387,48 +865,66 @@ function loadCatchmentsGeoJSON() {
         });
 }
 
-function setupTabs() {
-    var buttons = document.querySelectorAll(".tab-button");
-    var panels = document.querySelectorAll(".tab-panel");
+function handleFilterChange() {
+    resetResults();
 
-    buttons.forEach(function (button) {
-        button.addEventListener("click", function () {
-            var tab = button.getAttribute("data-tab");
-
-            buttons.forEach(function (item) {
-                item.classList.remove("active");
-            });
-
-            panels.forEach(function (panel) {
-                panel.classList.remove("active");
-            });
-
-            button.classList.add("active");
-            document.getElementById("tab-" + tab).classList.add("active");
-        });
-    });
-}
-
-catchmentSelect.addEventListener("change", function () {
     var selectedId = catchmentSelect.value;
     if (selectedId) {
         highlightCatchment(selectedId);
+        updateQuickStats(null);
         setStatus("Catchment selected. Adjust dates and run analysis.", false);
+        return;
     }
-});
+
+    activeCatchmentId = null;
+    if (catchmentsLayer) {
+        catchmentsLayer.eachLayer(function (layer) {
+            layer.setStyle(getFeatureStyle(layer.feature));
+        });
+    }
+
+    updateQuickStats(null);
+    setStatus("Choose filters and run the analysis.", false);
+}
+
+function handleDateChange() {
+    resetResults();
+    updateQuickStats(null);
+    setStatus("Dates changed. Run analysis to load updated results.", false);
+}
+
+catchmentSelect.addEventListener("change", handleFilterChange);
+startDateInput.addEventListener("change", handleDateChange);
+endDateInput.addEventListener("change", handleDateChange);
+
+if (burnedOverlayToggle) {
+    burnedOverlayToggle.addEventListener("change", syncBurnedAreaOverlay);
+}
+
+if (resetAnalysisButton) {
+    resetAnalysisButton.addEventListener("click", resetAnalysisUiState);
+}
 
 runButton.addEventListener("click", function () {
     var id = catchmentSelect.value;
     var start = startDateInput.value;
     var end = endDateInput.value;
+    var requestId = currentRequestId + 1;
 
     if (!id || !start || !end) {
         setStatus("Please select a catchment and both dates.", true);
         return;
     }
 
+    currentRequestId = requestId;
     setLoadingState(true);
+    hasCompletedAnalysis = false;
+    setResetButtonVisible(false);
+    burnedAreaOverlayData = null;
+    removeBurnedAreaOverlay();
+    updateQuickStats(null);
     setStatus("Loading analysis results...", false);
+    console.log("Selected catchment_id:", id);
 
     fetch("http://127.0.0.1:5000/query?catchment_id=" + encodeURIComponent(id) + "&start_date=" + encodeURIComponent(start) + "&end_date=" + encodeURIComponent(end))
         .then(function (res) {
@@ -437,24 +933,84 @@ runButton.addEventListener("click", function () {
             }
             return res.json();
         })
-        .then(function (data) {
-            renderResults(data);
+        .then(function (payload) {
+            if (requestId !== currentRequestId) {
+                return;
+            }
+
+            var records = Array.isArray(payload) ? payload : (payload.records || []);
+            var overlay = Array.isArray(payload) ? null : payload.overlay;
+
+            renderResults(records, overlay);
+            exportButton.disabled = !records.length;
             highlightCatchment(id);
             setStatus("Analysis complete.", false);
         })
         .catch(function (err) {
+            if (requestId !== currentRequestId) {
+                return;
+            }
+
             console.error(err);
-            renderResults([]);
+            resetResults(false);
             setStatus("Could not load data from the API.", true);
         })
         .finally(function () {
-            setLoadingState(false);
+            if (requestId === currentRequestId) {
+                setLoadingState(false);
+            }
         });
+});
+
+if (toggleControlsButton) {
+    toggleControlsButton.addEventListener("click", function () {
+        setControlsCollapsed(!controlPanel.classList.contains("is-collapsed"));
+    });
+}
+
+if (showMapButton) {
+    showMapButton.addEventListener("click", function () {
+        setResultsPanelOpen(false);
+    });
+}
+
+if (showResultsButton) {
+    showResultsButton.addEventListener("click", function () {
+        setResultsPanelOpen(true);
+    });
+}
+
+if (closeResultsButton) {
+    closeResultsButton.addEventListener("click", function () {
+        setResultsPanelOpen(false);
+    });
+}
+
+if (resultsBackdrop) {
+    resultsBackdrop.addEventListener("click", function () {
+        setResultsPanelOpen(false);
+    });
+}
+
+document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape") {
+        setResultsPanelOpen(false);
+    }
+});
+
+window.addEventListener("resize", function () {
+    if (resultsChart && appShell.classList.contains("is-results-open")) {
+        resultsChart.resize();
+    }
+
+    map.invalidateSize();
 });
 
 exportButton.addEventListener("click", exportResultsAsCsv);
 
 addLegend();
 addLandcoverOverlay();
-setupTabs();
+setControlsCollapsed(false);
+setResultsPanelOpen(false);
+updateQuickStats(null);
 loadCatchmentsGeoJSON();
