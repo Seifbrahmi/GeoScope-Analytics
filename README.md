@@ -113,7 +113,7 @@ python -m http.server 8000
 ```
 Open:
 http://localhost:8000
----
+
 ### 🔗 API Endpoints
 /query
 
@@ -126,7 +126,6 @@ start_date
 end_date
 
 Returns:
-
 Time series (burned area, rainfall, land cover)
 Burned area overlay (PNG)
 Hydrological summary
@@ -138,7 +137,7 @@ Get catchment from selected lake
 Lakes within selected catchment
 /land-cover
 Dominant land cover per catchment
----
+
 ### 🧠 Key Logic
 Catchment is determined dynamically from lake selection
 Burned area:
@@ -147,12 +146,12 @@ Visualized via raster overlays
 Rainfall:
 Averaged per catchment
 Data is aligned monthly
----
+
 ### 📌 Notes
 Coordinate systems handled automatically (WGS84 ↔ projected CRS)
 Raster clipping is performed per catchment
 Overlays are generated dynamically
----
+
 ### 🎯 Use Case
 
 Analyze environmental dynamics across North America:
