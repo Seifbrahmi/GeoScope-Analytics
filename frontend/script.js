@@ -5,17 +5,27 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
 }).addTo(map);
 
 var catchmentsLayer = null;
+var catchmentsGeoJsonData = null;
+var selectedCatchmentLayer = null;
 var resultsChart = null;
 var activeCatchmentId = null;
+var selectedLakeId = null;
+var selectedLakeCatchmentId = null;
+var selectedLakeLabel = null;
 var currentResults = [];
 var currentRequestId = 0;
 var catchmentIdByOutlet = {};
 var landCoverByCatchment = {};
 var landcoverOverlay = null;
+var landcoverLegend = null;
 var burnedAreaOverlay = null;
 var burnedAreaOverlayData = null;
 var burnedAreaLegend = null;
+var lakesLayer = null;
+var lakesGeoJsonData = null;
+var lakesOverviewLayer = null;
 var hasCompletedAnalysis = false;
+var analysisIsLoading = false;
 
 var appShell = document.querySelector(".app-shell");
 var controlPanel = document.getElementById("control-panel");
@@ -26,6 +36,7 @@ var endDateInput = document.getElementById("end-date");
 var runButton = document.getElementById("run-analysis");
 var resetAnalysisButton = document.getElementById("reset-analysis");
 var burnedOverlayToggle = document.getElementById("toggle-burned-overlay");
+var lakesLayerToggle = document.getElementById("toggle-lakes-layer");
 var exportButton = document.getElementById("export-csv");
 var closeResultsButton = document.getElementById("close-results");
 var resultsBackdrop = document.getElementById("results-backdrop");
@@ -34,9 +45,13 @@ var showResultsButton = document.getElementById("show-results");
 var tableContainer = document.getElementById("table-container");
 var resultsChartCanvas = document.getElementById("results-chart");
 var resultsShell = document.getElementById("results-drawer");
+var resultsTitle = document.getElementById("results-title");
+var selectedLakeValue = document.getElementById("selected-lake-value");
 var avgBurnedArea = document.getElementById("avg-burned-area");
 var avgRainfall = document.getElementById("avg-rainfall");
 var dominantLandCover = document.getElementById("dominant-land-cover");
+var lakeCoverage = document.getElementById("lake-coverage");
+var waterInsight = document.getElementById("water-insight");
 var quickCatchment = document.getElementById("quick-catchment");
 var quickWindow = document.getElementById("quick-window");
 var quickRecords = document.getElementById("quick-records");
@@ -73,6 +88,29 @@ var landCoverColors = {
     100: "#8d99ae"
 };
 
+function metersToMillimeters(value) {
+    var numericValue = Number(value);
+    return isNaN(numericValue) ? null : numericValue * 1000;
+}
+
+function formatBurnedAreaHectares(value) {
+    var numericValue = Number(value);
+
+    if (isNaN(numericValue)) {
+        return "--";
+    }
+
+    if (numericValue === 0) {
+        return "0.00";
+    }
+
+    return numericValue < 1 ? numericValue.toFixed(4) : numericValue.toFixed(2);
+}
+
+function updateRunButtonState() {
+    runButton.disabled = analysisIsLoading || !selectedLakeId;
+}
+
 function setStatus(message, isError) {
     var status = document.getElementById("status-message");
     status.textContent = message;
@@ -86,8 +124,21 @@ function setStatus(message, isError) {
 }
 
 function setLoadingState(isLoading) {
-    runButton.disabled = isLoading;
+    analysisIsLoading = isLoading;
+    updateRunButtonState();
     runButton.textContent = isLoading ? "Running..." : "Run Analysis";
+}
+
+function setSelectedLakeDisplay(label) {
+    var displayLabel = label || "--";
+
+    if (selectedLakeValue) {
+        selectedLakeValue.textContent = displayLabel;
+    }
+
+    if (resultsTitle) {
+        resultsTitle.textContent = label ? "Analysis for Selected Lake" : "Analysis for Selected Lake";
+    }
 }
 
 function setResetButtonVisible(isVisible) {
@@ -293,6 +344,33 @@ function getSelectedStyle(feature) {
     };
 }
 
+function getLakeStyle() {
+    return {
+        color: "#1E90FF",
+        weight: 1.1,
+        fillColor: "#4aa8ff",
+        fillOpacity: 0.5
+    };
+}
+
+function getLakeHoverStyle() {
+    return {
+        color: "#0c6ed7",
+        weight: 2,
+        fillColor: "#4aa8ff",
+        fillOpacity: 0.68
+    };
+}
+
+function getSelectedLakeStyle() {
+    return {
+        color: "#0f4c81",
+        weight: 2.4,
+        fillColor: "#1E90FF",
+        fillOpacity: 0.74
+    };
+}
+
 function resetLayerStyle(layer) {
     var id = getFeatureCatchmentId(layer.feature);
     if (String(id) === String(activeCatchmentId)) {
@@ -302,29 +380,65 @@ function resetLayerStyle(layer) {
     }
 }
 
-function highlightCatchment(id) {
-    activeCatchmentId = id;
-    if (!catchmentsLayer) {
+function removeSelectedCatchmentLayer() {
+    if (selectedCatchmentLayer) {
+        map.removeLayer(selectedCatchmentLayer);
+        selectedCatchmentLayer = null;
+    }
+
+    removeLandcoverLegend();
+}
+
+function showSelectedCatchment(feature, shouldFitBounds) {
+    removeSelectedCatchmentLayer();
+
+    if (!feature) {
+        activeCatchmentId = null;
         return;
     }
 
-    catchmentsLayer.eachLayer(function (layer) {
-        if (String(getFeatureCatchmentId(layer.feature)) === String(id)) {
-            layer.setStyle(getSelectedStyle(layer.feature));
-            map.fitBounds(layer.getBounds(), getMapFitOptions());
-
-            if (layer.getTooltip()) {
-                layer.openTooltip();
-                window.setTimeout(function () {
-                    if (layer.getTooltip()) {
-                        layer.closeTooltip();
-                    }
-                }, 1200);
-            }
-        } else {
-            layer.setStyle(getFeatureStyle(layer.feature));
+    activeCatchmentId = getFeatureCatchmentId(feature);
+    selectedCatchmentLayer = L.geoJSON(feature, {
+        style: function () {
+            return {
+                color: "#ff916b",
+                weight: 3,
+                fillColor: getCatchmentFillColor(feature),
+                fillOpacity: 0.16
+            };
         }
-    });
+    }).addTo(map);
+
+    syncLandcoverLegend();
+
+    if (shouldFitBounds !== false) {
+        map.fitBounds(selectedCatchmentLayer.getBounds(), getMapFitOptions());
+    }
+}
+
+function findCatchmentFeatureById(id) {
+    if (!catchmentsGeoJsonData || !catchmentsGeoJsonData.features) {
+        return null;
+    }
+
+    for (var i = 0; i < catchmentsGeoJsonData.features.length; i += 1) {
+        var feature = catchmentsGeoJsonData.features[i];
+        if (String(getFeatureCatchmentId(feature)) === String(id)) {
+            return feature;
+        }
+    }
+
+    return null;
+}
+
+function highlightCatchment(id) {
+    activeCatchmentId = id;
+    var feature = findCatchmentFeatureById(id);
+    if (!feature) {
+        return;
+    }
+
+    showSelectedCatchment(feature, true);
 }
 
 function renderTable(data) {
@@ -338,11 +452,19 @@ function renderTable(data) {
         return "<th>" + column + "</th>";
     }).join("");
 
+    header = header.replace("<th>rainfall</th>", "<th>rainfall_mm</th>");
+    header = header.replace("<th>burned_area</th>", "<th>burned_area_ha</th>");
+
     var rows = data.map(function (row) {
         return "<tr>" + columns.map(function (column) {
             var value = row[column];
             if (column === "land_cover") {
                 value = getLandCoverLabel(value);
+            } else if (column === "burned_area") {
+                value = value === undefined || value === null || value === "" ? "--" : formatBurnedAreaHectares(value);
+            } else if (column === "rainfall") {
+                var rainfallMillimeters = metersToMillimeters(value);
+                value = rainfallMillimeters === null ? "--" : rainfallMillimeters.toFixed(2);
             } else if (value === undefined || value === null || value === "") {
                 value = "--";
             }
@@ -370,8 +492,8 @@ function updateSummary(data) {
         return sum + Number(row.rainfall || 0);
     }, 0) / data.length;
 
-    avgBurnedArea.textContent = burnedAreaMean.toFixed(2);
-    avgRainfall.textContent = rainfallMean.toFixed(3);
+    avgBurnedArea.textContent = formatBurnedAreaHectares(burnedAreaMean);
+    avgRainfall.textContent = metersToMillimeters(rainfallMean).toFixed(2);
 
     var landCoverCounts = {};
 
@@ -395,6 +517,24 @@ function updateSummary(data) {
         : "N/A";
 }
 
+function updateLakeSummary(summary) {
+    if (!lakeCoverage || !waterInsight) {
+        return;
+    }
+
+    if (!summary) {
+        lakeCoverage.textContent = "--";
+        waterInsight.textContent = "Lake-based insight will appear here after analysis.";
+        return;
+    }
+
+    lakeCoverage.textContent = typeof summary.lake_coverage_percent === "number"
+        ? summary.lake_coverage_percent.toFixed(2) + "%"
+        : "--";
+
+    waterInsight.textContent = summary.water_insight || "Lake-based insight unavailable.";
+}
+
 function renderChart(data) {
     var ctx = resultsChartCanvas.getContext("2d");
     var labels = data.map(function (row) {
@@ -406,7 +546,8 @@ function renderChart(data) {
     });
 
     var rainfall = data.map(function (row) {
-        return row.rainfall;
+        var rainfallMillimeters = metersToMillimeters(row.rainfall);
+        return rainfallMillimeters === null ? 0 : rainfallMillimeters;
     });
 
     if (resultsChart) {
@@ -419,7 +560,7 @@ function renderChart(data) {
             labels: labels,
             datasets: [
                 {
-                    label: "Burned Area",
+                    label: "Burned Area (ha)",
                     data: burnedArea,
                     borderColor: "#f97316",
                     backgroundColor: "rgba(249, 115, 22, 0.12)",
@@ -430,7 +571,7 @@ function renderChart(data) {
                     yAxisID: "y"
                 },
                 {
-                    label: "Rainfall",
+                    label: "Rainfall (mm)",
                     data: rainfall,
                     borderColor: "#10b981",
                     backgroundColor: "rgba(16, 185, 129, 0.12)",
@@ -458,6 +599,16 @@ function renderChart(data) {
                     grid: {
                         color: chartGridColor
                     },
+                    title: {
+                        display: true,
+                        text: "Burned Area (ha)",
+                        color: chartTextColor,
+                        font: {
+                            family: chartFontFamily,
+                            size: 11,
+                            weight: 700
+                        }
+                    },
                     ticks: {
                         color: chartTextColor,
                         font: {
@@ -471,6 +622,16 @@ function renderChart(data) {
                     position: "right",
                     grid: {
                         drawOnChartArea: false
+                    },
+                    title: {
+                        display: true,
+                        text: "Rainfall (mm)",
+                        color: chartTextColor,
+                        font: {
+                            family: chartFontFamily,
+                            size: 11,
+                            weight: 700
+                        }
                     },
                     ticks: {
                         color: chartTextColor,
@@ -527,6 +688,241 @@ function removeBurnedAreaOverlay() {
     }
 }
 
+function removeLandcoverLegend() {
+    if (landcoverLegend) {
+        map.removeControl(landcoverLegend);
+        landcoverLegend = null;
+    }
+}
+
+function getAvailableLandCoverEntries() {
+    var availableValues = {};
+
+    currentResults.forEach(function (row) {
+        var landCoverValue = getLandCoverValue(row.land_cover);
+        if (landCoverValue === null || !landCoverMap[landCoverValue] || !landCoverColors[landCoverValue]) {
+            return;
+        }
+
+        availableValues[landCoverValue] = true;
+    });
+
+    return Object.keys(availableValues)
+        .map(function (value) {
+            var numericValue = Number(value);
+            return {
+                value: numericValue,
+                label: landCoverMap[numericValue],
+                color: landCoverColors[numericValue]
+            };
+        })
+        .sort(function (a, b) {
+            return a.value - b.value;
+        });
+}
+
+function addLandcoverLegend() {
+    removeLandcoverLegend();
+
+    if (!hasCompletedAnalysis || !selectedCatchmentLayer) {
+        return;
+    }
+
+    var entries = getAvailableLandCoverEntries();
+    if (!entries.length) {
+        return;
+    }
+
+    landcoverLegend = L.control({ position: "bottomright" });
+
+    landcoverLegend.onAdd = function () {
+        var div = L.DomUtil.create("div", "legend landcover-legend");
+        var itemsMarkup = entries.map(function (entry) {
+            return (
+                '<div class="landcover-legend-item">' +
+                    '<span class="landcover-legend-swatch" style="background:' + entry.color + ';"></span>' +
+                    '<span class="landcover-legend-label">' + entry.label + "</span>" +
+                "</div>"
+            );
+        }).join("");
+
+        div.innerHTML =
+            '<div class="landcover-legend-title">Land Cover</div>' +
+            '<div class="landcover-legend-items">' + itemsMarkup + "</div>";
+        return div;
+    };
+
+    landcoverLegend.addTo(map);
+    window.setTimeout(function () {
+        var element = landcoverLegend && landcoverLegend.getContainer ? landcoverLegend.getContainer() : null;
+        if (element) {
+            element.classList.add("is-visible");
+        }
+    }, 20);
+}
+
+function syncLandcoverLegend() {
+    addLandcoverLegend();
+}
+
+function removeLakesLayer() {
+    if (lakesLayer) {
+        map.removeLayer(lakesLayer);
+        lakesLayer = null;
+    }
+}
+
+function syncLakesLayer() {
+    removeLakesLayer();
+
+    if (!lakesGeoJsonData || !lakesLayerToggle || !lakesLayerToggle.checked || !hasCompletedAnalysis) {
+        return;
+    }
+
+    if (!Array.isArray(lakesGeoJsonData.features) || !lakesGeoJsonData.features.length) {
+        return;
+    }
+
+    lakesLayer = L.geoJSON(lakesGeoJsonData, {
+        style: function () {
+            return {
+                color: "#1E90FF",
+                fillColor: "#1E90FF",
+                fillOpacity: 0.5,
+                weight: 1
+            };
+        }
+    }).addTo(map);
+}
+
+function resetLakeOverviewStyle(layer) {
+    var featureLakeId = layer && layer.feature && layer.feature.properties
+        ? String(layer.feature.properties.Lake_ID)
+        : null;
+    layer.setStyle(featureLakeId === String(selectedLakeId) ? getSelectedLakeStyle() : getLakeStyle());
+}
+
+function updateLakeOverviewSelection() {
+    if (!lakesOverviewLayer) {
+        return;
+    }
+
+    lakesOverviewLayer.eachLayer(function (layer) {
+        resetLakeOverviewStyle(layer);
+    });
+}
+
+function applyLakeSelection(selectionPayload) {
+    selectedLakeId = selectionPayload && selectionPayload.lake_id ? String(selectionPayload.lake_id) : null;
+    selectedLakeCatchmentId = selectionPayload && selectionPayload.catchment_id ? String(selectionPayload.catchment_id) : null;
+    selectedLakeLabel = selectionPayload && selectionPayload.lake_label ? selectionPayload.lake_label : null;
+
+    setSelectedLakeDisplay(selectedLakeLabel);
+    updateRunButtonState();
+    updateLakeOverviewSelection();
+
+    if (!selectedLakeCatchmentId) {
+        catchmentSelect.innerHTML = '<option value="">No matching catchment</option>';
+        removeSelectedCatchmentLayer();
+        setStatus("This lake does not map to a catchment in the current dataset.", true);
+        return;
+    }
+
+    catchmentSelect.innerHTML = '<option value="' + selectedLakeCatchmentId + '">' + selectedLakeCatchmentId + "</option>";
+    catchmentSelect.value = selectedLakeCatchmentId;
+
+    var cachedCatchmentFeature = findCatchmentFeatureById(selectedLakeCatchmentId);
+    if (cachedCatchmentFeature) {
+        showSelectedCatchment(cachedCatchmentFeature, true);
+    } else if (selectionPayload.catchment) {
+        showSelectedCatchment(selectionPayload.catchment, true);
+    }
+
+    updateQuickStats(null);
+    setStatus("Lake selected. Choose dates and run analysis.", false);
+}
+
+function handleLakeSelection(lakeId) {
+    fetch("http://127.0.0.1:5000/lake-selection?lake_id=" + encodeURIComponent(lakeId))
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error("Failed to map lake to catchment");
+            }
+            return response.json();
+        })
+        .then(function (payload) {
+            resetResults();
+            applyLakeSelection(payload);
+        })
+        .catch(function (error) {
+            console.error(error);
+            setStatus("Could not map the selected lake to a catchment.", true);
+        });
+}
+
+function loadLakesOverview() {
+    return fetch("http://127.0.0.1:5000/lakes-overview")
+        .then(function (response) {
+            if (!response.ok) {
+                throw new Error("Failed to fetch lakes overview");
+            }
+            return response.json();
+        })
+        .then(function (data) {
+            if (!data.features || !data.features.length) {
+                throw new Error("No lakes available for selection");
+            }
+
+            lakesOverviewLayer = L.geoJSON(data, {
+                style: function () {
+                    return getLakeStyle();
+                },
+                onEachFeature: function (feature, layer) {
+                    var lakeId = feature.properties && feature.properties.Lake_ID !== undefined
+                        ? String(feature.properties.Lake_ID)
+                        : null;
+
+                    if (lakeId) {
+                        layer.bindTooltip("Lake " + lakeId, {
+                            direction: "top",
+                            sticky: true,
+                            className: "catchment-tooltip",
+                            opacity: 1
+                        });
+                    }
+
+                    layer.on("mouseover", function () {
+                        if (String(lakeId) !== String(selectedLakeId)) {
+                            layer.setStyle(getLakeHoverStyle());
+                        }
+                        if (layer._path) {
+                            layer._path.style.cursor = "pointer";
+                        }
+                    });
+
+                    layer.on("mouseout", function () {
+                        resetLakeOverviewStyle(layer);
+                    });
+
+                    layer.on("click", function () {
+                        if (!lakeId) {
+                            setStatus("This lake is missing an ID.", true);
+                            return;
+                        }
+
+                        handleLakeSelection(lakeId);
+                    });
+                }
+            }).addTo(map);
+
+            map.fitBounds(lakesOverviewLayer.getBounds(), {
+                paddingTopLeft: [24, 80],
+                paddingBottomRight: [24, 24]
+            });
+            setStatus("Lakes loaded. Select a lake on the map to begin.", false);
+        });
+}
+
 function addBurnedAreaLegend(legendConfig) {
     if (!legendConfig || legendConfig.has_data === false) {
         return;
@@ -566,6 +962,10 @@ function syncBurnedAreaOverlay() {
         return;
     }
 
+    if (!burnedAreaOverlayData.image_url || !burnedAreaOverlayData.bounds) {
+        return;
+    }
+
     burnedAreaOverlay = L.imageOverlay(
         burnedAreaOverlayData.image_url,
         burnedAreaOverlayData.bounds,
@@ -578,7 +978,7 @@ function syncBurnedAreaOverlay() {
     );
 
     burnedAreaOverlay.once("load", function () {
-        burnedAreaOverlay.setOpacity(burnedAreaOverlayData.opacity || 0.82);
+        burnedAreaOverlay.setOpacity(burnedAreaOverlayData.opacity || 0.8);
     });
 
     burnedAreaOverlay.addTo(map);
@@ -598,9 +998,13 @@ function resetResults(shouldInvalidateRequest) {
     currentResults = [];
     hasCompletedAnalysis = false;
     burnedAreaOverlayData = null;
+    lakesGeoJsonData = null;
     removeBurnedAreaOverlay();
+    removeLandcoverLegend();
+    removeLakesLayer();
     tableContainer.innerHTML = '<p class="placeholder">Results will appear here.</p>';
     updateSummary([]);
+    updateLakeSummary(null);
 
     if (resultsChart) {
         resultsChart.destroy();
@@ -613,15 +1017,19 @@ function resetResults(shouldInvalidateRequest) {
     setResultsPanelOpen(false);
 }
 
-function renderResults(data, overlay) {
+function renderResults(data, overlay, lakesData, summary) {
     currentResults = data.slice();
     hasCompletedAnalysis = true;
     burnedAreaOverlayData = overlay || null;
+    lakesGeoJsonData = lakesData || null;
     setResetButtonVisible(true);
     syncBurnedAreaOverlay();
+    syncLakesLayer();
+    syncLandcoverLegend();
     animateResultsShell();
     logLandCoverValues(data);
     updateSummary(data);
+    updateLakeSummary(summary || null);
     renderChart(data);
     renderTable(data);
     updateQuickStats(data.length);
@@ -631,25 +1039,21 @@ function renderResults(data, overlay) {
 function resetAnalysisUiState() {
     resetResults();
 
-    if (catchmentSelect.value && startDateInput.value && endDateInput.value) {
-        highlightCatchment(catchmentSelect.value);
+    if (selectedLakeCatchmentId && startDateInput.value && endDateInput.value) {
+        highlightCatchment(selectedLakeCatchmentId);
         setStatus("Analysis reset. Run analysis to load a new burned-area overlay.", false);
         return;
     }
 
-    if (catchmentSelect.value) {
-        highlightCatchment(catchmentSelect.value);
+    if (selectedLakeCatchmentId) {
+        highlightCatchment(selectedLakeCatchmentId);
         setStatus("Analysis reset. Choose dates and run analysis again.", false);
         return;
     }
 
     activeCatchmentId = null;
-    if (catchmentsLayer) {
-        catchmentsLayer.eachLayer(function (layer) {
-            layer.setStyle(getFeatureStyle(layer.feature));
-        });
-    }
-    setStatus("Choose filters and run the analysis.", false);
+    removeSelectedCatchmentLayer();
+    setStatus("Select a lake on the map to begin.", false);
 }
 
 function exportResultsAsCsv() {
@@ -688,30 +1092,6 @@ function exportResultsAsCsv() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-}
-
-function addLegend() {
-    var legend = L.control({ position: "bottomright" });
-
-    legend.onAdd = function () {
-        var div = L.DomUtil.create("div", "info legend");
-        div.innerHTML =
-            "<b>Land Cover</b><br>" +
-            '<i style="background:#2e7d32"></i> Tree cover<br>' +
-            '<i style="background:#4d7c0f"></i> Shrubland<br>' +
-            '<i style="background:#84cc16"></i> Grassland<br>' +
-            '<i style="background:#f9a825"></i> Cropland<br>' +
-            '<i style="background:#616161"></i> Built-up<br>' +
-            '<i style="background:#c2a878"></i> Bare / sparse vegetation<br>' +
-            '<i style="background:#dbeafe"></i> Snow and ice<br>' +
-            '<i style="background:#42a5f5"></i> Permanent water bodies<br>' +
-            '<i style="background:#14b8a6"></i> Herbaceous wetland<br>' +
-            '<i style="background:#0f766e"></i> Mangroves<br>' +
-            '<i style="background:#8d99ae"></i> Moss and lichen<br>';
-        return div;
-    };
-
-    legend.addTo(map);
 }
 
 function addLandcoverOverlay() {
@@ -797,66 +1177,10 @@ function loadCatchmentsGeoJSON() {
                 feature.properties.land_cover = catchmentId ? landCoverByCatchment[String(catchmentId)] : undefined;
             });
 
-            catchmentsLayer = L.geoJSON(data, {
-                style: function (feature) {
-                    return getFeatureStyle(feature);
-                },
-                onEachFeature: function (feature, layer) {
-                    var id = getFeatureCatchmentId(feature);
-
-                    if (id) {
-                        layer.bindTooltip("Catchment " + id, {
-                            direction: "top",
-                            sticky: true,
-                            className: "catchment-tooltip",
-                            opacity: 1
-                        });
-                    }
-
-                    layer.on("mouseover", function () {
-                        if (String(getFeatureCatchmentId(feature)) !== String(activeCatchmentId)) {
-                            layer.setStyle(getHoverStyle(feature));
-                        }
-                        if (layer._path) {
-                            layer._path.style.cursor = "pointer";
-                        }
-                    });
-
-                    layer.on("mouseout", function () {
-                        resetLayerStyle(layer);
-                    });
-
-                    layer.on("click", function () {
-                        var selectedId = getFeatureCatchmentId(feature);
-                        if (!selectedId) {
-                            setStatus("This map catchment does not have a matching dataset ID.", true);
-                            return;
-                        }
-
-                        catchmentSelect.value = selectedId;
-                        resetResults();
-                        highlightCatchment(selectedId);
-                        updateQuickStats(null);
-                        setStatus("Catchment selected from the map. Run analysis when ready.", false);
-                    });
-                }
-            }).addTo(map);
-
-            var seen = {};
-            var options = ['<option value="">Select a catchment</option>'];
-
-            data.features.forEach(function (feature) {
-                var id = getFeatureCatchmentId(feature);
-                if (id && !seen[id]) {
-                    seen[id] = true;
-                    options.push('<option value="' + id + '">' + id + "</option>");
-                }
-            });
-
-            catchmentSelect.innerHTML = options.join("");
+            catchmentsGeoJsonData = data;
+            catchmentSelect.innerHTML = '<option value="">Select a lake on the map</option>';
             resetResults();
             updateQuickStats(null);
-            setStatus("Catchments loaded. Select one and run analysis.", false);
         })
         .catch(function (error) {
             console.error("GeoJSON ERROR:", error);
@@ -866,25 +1190,10 @@ function loadCatchmentsGeoJSON() {
 }
 
 function handleFilterChange() {
-    resetResults();
-
-    var selectedId = catchmentSelect.value;
-    if (selectedId) {
-        highlightCatchment(selectedId);
-        updateQuickStats(null);
-        setStatus("Catchment selected. Adjust dates and run analysis.", false);
+    if (!selectedLakeId) {
+        setStatus("Select a lake on the map to begin.", false);
         return;
     }
-
-    activeCatchmentId = null;
-    if (catchmentsLayer) {
-        catchmentsLayer.eachLayer(function (layer) {
-            layer.setStyle(getFeatureStyle(layer.feature));
-        });
-    }
-
-    updateQuickStats(null);
-    setStatus("Choose filters and run the analysis.", false);
 }
 
 function handleDateChange() {
@@ -901,18 +1210,27 @@ if (burnedOverlayToggle) {
     burnedOverlayToggle.addEventListener("change", syncBurnedAreaOverlay);
 }
 
+if (lakesLayerToggle) {
+    lakesLayerToggle.addEventListener("change", syncLakesLayer);
+}
+
 if (resetAnalysisButton) {
     resetAnalysisButton.addEventListener("click", resetAnalysisUiState);
 }
 
 runButton.addEventListener("click", function () {
-    var id = catchmentSelect.value;
+    var id = selectedLakeCatchmentId || catchmentSelect.value;
     var start = startDateInput.value;
     var end = endDateInput.value;
     var requestId = currentRequestId + 1;
 
+    if (!selectedLakeId) {
+        setStatus("Please select a lake on the map first.", true);
+        return;
+    }
+
     if (!id || !start || !end) {
-        setStatus("Please select a catchment and both dates.", true);
+        setStatus("Please select a lake and both dates.", true);
         return;
     }
 
@@ -921,27 +1239,59 @@ runButton.addEventListener("click", function () {
     hasCompletedAnalysis = false;
     setResetButtonVisible(false);
     burnedAreaOverlayData = null;
+    lakesGeoJsonData = null;
     removeBurnedAreaOverlay();
+    removeLakesLayer();
     updateQuickStats(null);
     setStatus("Loading analysis results...", false);
-    console.log("Selected catchment_id:", id);
+    console.log("Selected lake_id:", selectedLakeId, "Selected catchment_id:", id);
 
-    fetch("http://127.0.0.1:5000/query?catchment_id=" + encodeURIComponent(id) + "&start_date=" + encodeURIComponent(start) + "&end_date=" + encodeURIComponent(end))
-        .then(function (res) {
-            if (!res.ok) {
-                throw new Error("API request failed");
-            }
-            return res.json();
-        })
-        .then(function (payload) {
+    var queryUrl = "http://127.0.0.1:5000/query?" + new URLSearchParams({
+        catchment_id: id,
+        start_date: start,
+        end_date: end
+    }).toString();
+
+    Promise.all([
+        fetch(queryUrl)
+            .then(function (res) {
+                if (!res.ok) {
+                    return res.json()
+                        .catch(function () {
+                            return {};
+                        })
+                        .then(function (payload) {
+                            throw new Error(payload.error || "API request failed");
+                        });
+                }
+                return res.json();
+            }),
+        fetch("http://127.0.0.1:5000/lakes?catchment_id=" + encodeURIComponent(id))
+            .then(function (res) {
+                if (!res.ok) {
+                    return res.json()
+                        .catch(function () {
+                            return {};
+                        })
+                        .then(function (payload) {
+                            throw new Error(payload.error || "Lakes request failed");
+                        });
+                }
+                return res.json();
+            })
+    ])
+        .then(function (responses) {
             if (requestId !== currentRequestId) {
                 return;
             }
 
+            var payload = responses[0];
+            var lakesData = responses[1];
             var records = Array.isArray(payload) ? payload : (payload.records || []);
             var overlay = Array.isArray(payload) ? null : payload.overlay;
+            var summary = Array.isArray(payload) ? null : payload.summary;
 
-            renderResults(records, overlay);
+            renderResults(records, overlay, lakesData, summary);
             exportButton.disabled = !records.length;
             highlightCatchment(id);
             setStatus("Analysis complete.", false);
@@ -953,7 +1303,7 @@ runButton.addEventListener("click", function () {
 
             console.error(err);
             resetResults(false);
-            setStatus("Could not load data from the API.", true);
+            setStatus(err && err.message ? err.message : "Could not load data from the API.", true);
         })
         .finally(function () {
             if (requestId === currentRequestId) {
@@ -1007,10 +1357,13 @@ window.addEventListener("resize", function () {
 });
 
 exportButton.addEventListener("click", exportResultsAsCsv);
-
-addLegend();
-addLandcoverOverlay();
 setControlsCollapsed(false);
 setResultsPanelOpen(false);
+setSelectedLakeDisplay(null);
+updateRunButtonState();
 updateQuickStats(null);
 loadCatchmentsGeoJSON();
+loadLakesOverview().catch(function (error) {
+    console.error("Lakes overview ERROR:", error);
+    setStatus(error.message, true);
+});

@@ -38,9 +38,14 @@
             <div class="control-body">
                 <div class="field-group">
                     <label for="catchmentSelect"><span class="field-icon">ID</span>Catchment</label>
-                    <select id="catchmentSelect">
-                        <option value="">Loading catchments...</option>
+                    <select id="catchmentSelect" disabled>
+                        <option value="">Select a lake on the map</option>
                     </select>
+                </div>
+
+                <div class="selection-meta">
+                    <span class="selection-meta-label">Selected Lake</span>
+                    <strong id="selected-lake-value">--</strong>
                 </div>
 
                 <div class="field-group">
@@ -59,6 +64,11 @@
                 <label class="toggle-row" for="toggle-burned-overlay">
                     <input id="toggle-burned-overlay" type="checkbox" checked>
                     <span>Show burned area overlay</span>
+                </label>
+
+                <label class="toggle-row" for="toggle-lakes-layer">
+                    <input id="toggle-lakes-layer" type="checkbox" checked>
+                    <span>Show lakes</span>
                 </label>
 
                 <div class="status-card">
@@ -94,7 +104,7 @@
             <div class="results-toolbar">
                 <div class="results-toolbar-copy">
                     <span class="panel-kicker">Results</span>
-                    <h2>Analysis Results</h2>
+                    <h2 id="results-title">Analysis for Selected Lake</h2>
                 </div>
                 <div class="results-toolbar-actions">
                     <button id="export-csv" class="export-button" type="button">Export CSV</button>
@@ -105,18 +115,23 @@
             <div class="results-overview">
                 <div class="kpi-grid">
                     <article class="kpi-card">
-                        <span class="kpi-label">Avg Burned Area</span>
+                        <span class="kpi-label">Avg Burned Area (ha)</span>
                         <strong id="avg-burned-area">--</strong>
                     </article>
                     <article class="kpi-card">
-                        <span class="kpi-label">Avg Rainfall</span>
+                        <span class="kpi-label">Average Rainfall (mm)</span>
                         <strong id="avg-rainfall">--</strong>
                     </article>
                     <article class="kpi-card">
                         <span class="kpi-label">Land Cover</span>
                         <strong id="dominant-land-cover">--</strong>
                     </article>
+                    <article class="kpi-card">
+                        <span class="kpi-label">Lake Coverage</span>
+                        <strong id="lake-coverage">--</strong>
+                    </article>
                 </div>
+                <p id="water-insight" class="insight-copy">Lake-based insight will appear here after analysis.</p>
             </div>
 
             <div id="results-drawer-body" class="results-grid">
