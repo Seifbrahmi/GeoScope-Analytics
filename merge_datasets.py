@@ -6,6 +6,7 @@ from spatial_aggregation import build_land_cover_lookup
 
 BURNT_AREA_PATH = Path("backend/outputs/burned_area_timeseries.csv")
 RAINFALL_PATH = Path("backend/outputs/rainfall_timeseries.csv")
+TEMPERATURE_PATH = Path("backend/outputs/temperature_timeseries.csv")
 FINAL_DATASET_PATH = Path("backend/outputs/final_dataset.csv")
 
 
@@ -34,18 +35,22 @@ def ensure_land_cover_column(fire: pd.DataFrame) -> pd.DataFrame:
 def main():
     fire = pd.read_csv(BURNT_AREA_PATH)
     rain = pd.read_csv(RAINFALL_PATH)
+    temperature = pd.read_csv(TEMPERATURE_PATH)
 
     fire["catchment_id"] = pd.to_numeric(fire["catchment_id"], errors="coerce").astype("Int64")
     rain["catchment_id"] = pd.to_numeric(rain["catchment_id"], errors="coerce").astype("Int64")
+    temperature["catchment_id"] = pd.to_numeric(temperature["catchment_id"], errors="coerce").astype("Int64")
     fire = ensure_land_cover_column(fire)
 
     df = pd.merge(fire, rain, on=["catchment_id", "date"])
+    df = pd.merge(df, temperature, on=["catchment_id", "date"], how="left")
     df["rainfall"] = df["rainfall"].fillna(0)
+    df["temperature"] = pd.to_numeric(df["temperature"], errors="coerce")
 
     if "land_cover" not in df.columns:
         df["land_cover"] = pd.NA
 
-    df = df[["catchment_id", "date", "burned_area", "rainfall", "land_cover"]]
+    df = df[["catchment_id", "date", "burned_area", "rainfall", "temperature", "land_cover"]]
     df.to_csv(FINAL_DATASET_PATH, index=False)
 
     print(f"Number of rows: {len(df)}")
