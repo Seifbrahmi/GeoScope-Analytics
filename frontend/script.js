@@ -21,6 +21,9 @@ var landcoverLegend = null;
 var burnedAreaOverlay = null;
 var burnedAreaOverlayData = null;
 var burnedAreaLegend = null;
+var temperatureOverlay = null;
+var temperatureOverlayData = null;
+var temperatureLegend = null;
 var lakesLayer = null;
 var lakesGeoJsonData = null;
 var lakesOverviewLayer = null;
@@ -37,6 +40,8 @@ var runButton = document.getElementById("run-analysis");
 var resetAnalysisButton = document.getElementById("reset-analysis");
 var burnedOverlayToggle = document.getElementById("toggle-burned-overlay");
 var lakesLayerToggle = document.getElementById("toggle-lakes-layer");
+var temperatureOverlayToggle = document.getElementById("toggle-temperature-overlay");
+var resultVariableInputs = Array.prototype.slice.call(document.querySelectorAll('input[name="result-variable"]'));
 var exportButton = document.getElementById("export-csv");
 var closeResultsButton = document.getElementById("close-results");
 var resultsBackdrop = document.getElementById("results-backdrop");
@@ -49,9 +54,11 @@ var resultsTitle = document.getElementById("results-title");
 var selectedLakeValue = document.getElementById("selected-lake-value");
 var avgBurnedArea = document.getElementById("avg-burned-area");
 var avgRainfall = document.getElementById("avg-rainfall");
+var avgTemperature = document.getElementById("avg-temperature");
 var dominantLandCover = document.getElementById("dominant-land-cover");
 var lakeCoverage = document.getElementById("lake-coverage");
 var waterInsight = document.getElementById("water-insight");
+var variableCards = Array.prototype.slice.call(document.querySelectorAll("[data-variable-card]"));
 var quickCatchment = document.getElementById("quick-catchment");
 var quickWindow = document.getElementById("quick-window");
 var quickRecords = document.getElementById("quick-records");
@@ -59,6 +66,22 @@ var statusDot = document.querySelector(".status-dot");
 var chartTextColor = "#6b7280";
 var chartGridColor = "rgba(203, 213, 225, 0.65)";
 var chartFontFamily = "\"Manrope\", \"Segoe UI\", sans-serif";
+var lastRequestedVariables = ["temperature", "rainfall", "burned_area"];
+
+var resultVariableConfig = {
+    temperature: {
+        label: "Temperature",
+        overlayToggle: temperatureOverlayToggle
+    },
+    rainfall: {
+        label: "Rainfall",
+        overlayToggle: null
+    },
+    burned_area: {
+        label: "FireCCI / Burned Area",
+        overlayToggle: burnedOverlayToggle
+    }
+};
 
 var landCoverMap = {
     10: "Tree cover",
@@ -107,8 +130,43 @@ function formatBurnedAreaHectares(value) {
     return numericValue < 1 ? numericValue.toFixed(4) : numericValue.toFixed(2);
 }
 
+function formatTemperatureCelsius(value) {
+    var numericValue = Number(value);
+    return isNaN(numericValue) ? "--" : numericValue.toFixed(2);
+}
+
+function getSelectedResultVariables() {
+    return resultVariableInputs
+        .filter(function (input) {
+            return input.checked;
+        })
+        .map(function (input) {
+            return input.value;
+        });
+}
+
+function hasSelectedResultVariable(variableKey, selectedVariables) {
+    var variables = selectedVariables || getSelectedResultVariables();
+    return variables.indexOf(variableKey) !== -1;
+}
+
+function enforceResultVariableSelection(changedInput) {
+    var selectedVariables = getSelectedResultVariables();
+
+    if (selectedVariables.length) {
+        return true;
+    }
+
+    if (changedInput) {
+        changedInput.checked = true;
+    }
+
+    setStatus("Select at least one result variable.", true);
+    return false;
+}
+
 function updateRunButtonState() {
-    runButton.disabled = analysisIsLoading || !selectedLakeId;
+    runButton.disabled = analysisIsLoading || !selectedLakeId || !getSelectedResultVariables().length;
 }
 
 function setStatus(message, isError) {
@@ -441,19 +499,77 @@ function highlightCatchment(id) {
     showSelectedCatchment(feature, true);
 }
 
-function renderTable(data) {
+function updateVariableCardVisibility(selectedVariables) {
+    variableCards.forEach(function (card) {
+        var variableKey = card.getAttribute("data-variable-card");
+        card.classList.toggle("is-hidden", !hasSelectedResultVariable(variableKey, selectedVariables));
+    });
+}
+
+function updateVariableOverlayToggleState(selectedVariables) {
+    Object.keys(resultVariableConfig).forEach(function (variableKey) {
+        var config = resultVariableConfig[variableKey];
+        var toggle = config.overlayToggle;
+
+        if (!toggle) {
+            return;
+        }
+
+        var row = toggle.closest(".toggle-row");
+        var isEnabled = hasSelectedResultVariable(variableKey, selectedVariables);
+
+        toggle.disabled = !isEnabled;
+        if (row) {
+            row.classList.toggle("is-disabled", !isEnabled);
+        }
+    });
+}
+
+function applySelectedResultVariableView(options) {
+    var selectedVariables = getSelectedResultVariables();
+    var hasResults = options && options.hasResults;
+    var shouldSyncOverlays = !options || options.syncOverlays !== false;
+
+    updateVariableCardVisibility(selectedVariables);
+    updateVariableOverlayToggleState(selectedVariables);
+
+    if (!hasResults) {
+        return;
+    }
+
+    updateSummary(currentResults, selectedVariables);
+    renderChart(currentResults, selectedVariables);
+    renderTable(currentResults, selectedVariables);
+
+    if (shouldSyncOverlays) {
+        syncBurnedAreaOverlay();
+        syncTemperatureOverlay();
+    }
+}
+
+function renderTable(data, selectedVariables) {
     if (!data.length) {
         tableContainer.innerHTML = '<p class="placeholder">No results returned for the selected filters.</p>';
         return;
     }
 
-    var columns = Object.keys(data[0]);
+    var columns = ["catchment_id", "date"];
+    if (hasSelectedResultVariable("burned_area", selectedVariables)) {
+        columns.push("burned_area");
+    }
+    if (hasSelectedResultVariable("rainfall", selectedVariables)) {
+        columns.push("rainfall");
+    }
+    if (hasSelectedResultVariable("temperature", selectedVariables)) {
+        columns.push("temperature");
+    }
     var header = columns.map(function (column) {
         return "<th>" + column + "</th>";
     }).join("");
 
     header = header.replace("<th>rainfall</th>", "<th>rainfall_mm</th>");
     header = header.replace("<th>burned_area</th>", "<th>burned_area_ha</th>");
+    header = header.replace("<th>temperature</th>", "<th>temperature_c</th>");
 
     var rows = data.map(function (row) {
         return "<tr>" + columns.map(function (column) {
@@ -465,6 +581,8 @@ function renderTable(data) {
             } else if (column === "rainfall") {
                 var rainfallMillimeters = metersToMillimeters(value);
                 value = rainfallMillimeters === null ? "--" : rainfallMillimeters.toFixed(2);
+            } else if (column === "temperature") {
+                value = formatTemperatureCelsius(value);
             } else if (value === undefined || value === null || value === "") {
                 value = "--";
             }
@@ -476,10 +594,11 @@ function renderTable(data) {
         "<table><thead><tr>" + header + "</tr></thead><tbody>" + rows + "</tbody></table>";
 }
 
-function updateSummary(data) {
+function updateSummary(data, selectedVariables) {
     if (!data.length) {
         avgBurnedArea.textContent = "--";
         avgRainfall.textContent = "--";
+        avgTemperature.textContent = "--";
         dominantLandCover.textContent = "--";
         return;
     }
@@ -492,8 +611,29 @@ function updateSummary(data) {
         return sum + Number(row.rainfall || 0);
     }, 0) / data.length;
 
-    avgBurnedArea.textContent = formatBurnedAreaHectares(burnedAreaMean);
-    avgRainfall.textContent = metersToMillimeters(rainfallMean).toFixed(2);
+    var temperatureRows = data
+        .map(function (row) {
+            return Number(row.temperature);
+        })
+        .filter(function (value) {
+            return !isNaN(value);
+        });
+
+    var temperatureMean = temperatureRows.length
+        ? temperatureRows.reduce(function (sum, value) {
+            return sum + value;
+        }, 0) / temperatureRows.length
+        : null;
+
+    avgBurnedArea.textContent = hasSelectedResultVariable("burned_area", selectedVariables)
+        ? formatBurnedAreaHectares(burnedAreaMean)
+        : "--";
+    avgRainfall.textContent = hasSelectedResultVariable("rainfall", selectedVariables)
+        ? metersToMillimeters(rainfallMean).toFixed(2)
+        : "--";
+    avgTemperature.textContent = hasSelectedResultVariable("temperature", selectedVariables)
+        ? (temperatureMean === null ? "--" : formatTemperatureCelsius(temperatureMean))
+        : "--";
 
     var landCoverCounts = {};
 
@@ -535,7 +675,7 @@ function updateLakeSummary(summary) {
     waterInsight.textContent = summary.water_insight || "Lake-based insight unavailable.";
 }
 
-function renderChart(data) {
+function renderChart(data, selectedVariables) {
     var ctx = resultsChartCanvas.getContext("2d");
     var labels = data.map(function (row) {
         return row.date;
@@ -550,38 +690,153 @@ function renderChart(data) {
         return rainfallMillimeters === null ? 0 : rainfallMillimeters;
     });
 
+    var temperature = data.map(function (row) {
+        var numericValue = Number(row.temperature);
+        return isNaN(numericValue) ? null : numericValue;
+    });
+
     if (resultsChart) {
         resultsChart.destroy();
+    }
+
+    var datasets = [];
+    var scales = {
+        x: {
+            grid: {
+                color: chartGridColor
+            },
+            ticks: {
+                color: chartTextColor,
+                maxRotation: 0,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 600
+                }
+            }
+        }
+    };
+
+    if (hasSelectedResultVariable("burned_area", selectedVariables)) {
+        datasets.push({
+            label: "Burned Area (ha)",
+            data: burnedArea,
+            borderColor: "#f97316",
+            backgroundColor: "rgba(249, 115, 22, 0.12)",
+            borderWidth: 3,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            tension: 0.35,
+            yAxisID: "y"
+        });
+        scales.y = {
+            position: "left",
+            grid: {
+                color: chartGridColor
+            },
+            title: {
+                display: true,
+                text: "Burned Area (ha)",
+                color: chartTextColor,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 700
+                }
+            },
+            ticks: {
+                color: chartTextColor,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 600
+                }
+            }
+        };
+    }
+
+    if (hasSelectedResultVariable("rainfall", selectedVariables)) {
+        datasets.push({
+            label: "Rainfall (mm)",
+            data: rainfall,
+            borderColor: "#10b981",
+            backgroundColor: "rgba(16, 185, 129, 0.12)",
+            borderWidth: 3,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            tension: 0.35,
+            yAxisID: "y1"
+        });
+        scales.y1 = {
+            position: "right",
+            grid: {
+                drawOnChartArea: false
+            },
+            title: {
+                display: true,
+                text: "Rainfall (mm)",
+                color: chartTextColor,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 700
+                }
+            },
+            ticks: {
+                color: chartTextColor,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 600
+                }
+            }
+        };
+    }
+
+    if (hasSelectedResultVariable("temperature", selectedVariables)) {
+        datasets.push({
+            label: "Temperature (\u00B0C)",
+            data: temperature,
+            borderColor: "#ef4444",
+            backgroundColor: "rgba(239, 68, 68, 0.14)",
+            borderWidth: 3,
+            pointRadius: 2,
+            pointHoverRadius: 5,
+            tension: 0.35,
+            yAxisID: "y2"
+        });
+        scales.y2 = {
+            position: "right",
+            offset: true,
+            grid: {
+                drawOnChartArea: false
+            },
+            title: {
+                display: true,
+                text: "Temperature (\u00B0C)",
+                color: chartTextColor,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 700
+                }
+            },
+            ticks: {
+                color: chartTextColor,
+                font: {
+                    family: chartFontFamily,
+                    size: 11,
+                    weight: 600
+                }
+            }
+        };
     }
 
     resultsChart = new Chart(ctx, {
         type: "line",
         data: {
             labels: labels,
-            datasets: [
-                {
-                    label: "Burned Area (ha)",
-                    data: burnedArea,
-                    borderColor: "#f97316",
-                    backgroundColor: "rgba(249, 115, 22, 0.12)",
-                    borderWidth: 3,
-                    pointRadius: 2,
-                    pointHoverRadius: 5,
-                    tension: 0.35,
-                    yAxisID: "y"
-                },
-                {
-                    label: "Rainfall (mm)",
-                    data: rainfall,
-                    borderColor: "#10b981",
-                    backgroundColor: "rgba(16, 185, 129, 0.12)",
-                    borderWidth: 3,
-                    pointRadius: 2,
-                    pointHoverRadius: 5,
-                    tension: 0.35,
-                    yAxisID: "y1"
-                }
-            ]
+            datasets: datasets
         },
         options: {
             responsive: true,
@@ -593,70 +848,7 @@ function renderChart(data) {
                 mode: "index",
                 intersect: false
             },
-            scales: {
-                y: {
-                    position: "left",
-                    grid: {
-                        color: chartGridColor
-                    },
-                    title: {
-                        display: true,
-                        text: "Burned Area (ha)",
-                        color: chartTextColor,
-                        font: {
-                            family: chartFontFamily,
-                            size: 11,
-                            weight: 700
-                        }
-                    },
-                    ticks: {
-                        color: chartTextColor,
-                        font: {
-                            family: chartFontFamily,
-                            size: 11,
-                            weight: 600
-                        }
-                    }
-                },
-                y1: {
-                    position: "right",
-                    grid: {
-                        drawOnChartArea: false
-                    },
-                    title: {
-                        display: true,
-                        text: "Rainfall (mm)",
-                        color: chartTextColor,
-                        font: {
-                            family: chartFontFamily,
-                            size: 11,
-                            weight: 700
-                        }
-                    },
-                    ticks: {
-                        color: chartTextColor,
-                        font: {
-                            family: chartFontFamily,
-                            size: 11,
-                            weight: 600
-                        }
-                    }
-                },
-                x: {
-                    grid: {
-                        color: chartGridColor
-                    },
-                    ticks: {
-                        color: chartTextColor,
-                        maxRotation: 0,
-                        font: {
-                            family: chartFontFamily,
-                            size: 11,
-                            weight: 600
-                        }
-                    }
-                }
-            },
+            scales: scales,
             plugins: {
                 legend: {
                     labels: {
@@ -685,6 +877,18 @@ function removeBurnedAreaOverlay() {
     if (burnedAreaLegend) {
         map.removeControl(burnedAreaLegend);
         burnedAreaLegend = null;
+    }
+}
+
+function removeTemperatureOverlay() {
+    if (temperatureOverlay) {
+        map.removeLayer(temperatureOverlay);
+        temperatureOverlay = null;
+    }
+
+    if (temperatureLegend) {
+        map.removeControl(temperatureLegend);
+        temperatureLegend = null;
     }
 }
 
@@ -928,35 +1132,91 @@ function addBurnedAreaLegend(legendConfig) {
         return;
     }
 
-    burnedAreaLegend = L.control({ position: legendConfig.position || "bottomright" });
+    burnedAreaLegend = addGradientLegendControl(
+        legendConfig,
+        {
+            position: "bottomright",
+            title: "Burned Area Intensity",
+            unit: null,
+            min_label: "Low",
+            max_label: "High",
+            colors: ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"]
+        }
+    );
+}
 
-    burnedAreaLegend.onAdd = function () {
-        var div = L.DomUtil.create("div", "legend burned-legend");
-        var colors = Array.isArray(legendConfig.colors) && legendConfig.colors.length
-            ? legendConfig.colors
-            : ["#fee5d9", "#fcae91", "#fb6a4a", "#de2d26", "#a50f15"];
+function addTemperatureLegend(legendConfig) {
+    if (!legendConfig || legendConfig.has_data === false) {
+        return;
+    }
+
+    var normalizedLegendConfig = Object.assign({}, legendConfig, {
+        position: "bottomright",
+        title: "Temperature",
+        unit: "\u00B0C"
+    });
+
+    temperatureLegend = addGradientLegendControl(
+        normalizedLegendConfig,
+        {
+            position: "bottomright",
+            title: "Temperature",
+            unit: "\u00B0C",
+            min_label: "Cold",
+            max_label: "Hot",
+            colors: ["#313695", "#4575b4", "#74add1", "#fee090", "#f46d43", "#a50026"],
+            extraClassName: "temperature-legend"
+        }
+    );
+}
+
+function addGradientLegendControl(legendConfig, defaults) {
+    var resolvedConfig = Object.assign({}, defaults || {}, legendConfig || {});
+    var control = L.control({ position: resolvedConfig.position || "bottomright" });
+
+    control.onAdd = function () {
+        var classNames = ["legend", "burned-legend"];
+        if (resolvedConfig.extraClassName) {
+            classNames.push(resolvedConfig.extraClassName);
+        }
+
+        var div = L.DomUtil.create("div", classNames.join(" "));
+        var colors = Array.isArray(resolvedConfig.colors) && resolvedConfig.colors.length
+            ? resolvedConfig.colors
+            : (defaults && defaults.colors) || [];
+        var unitMarkup = resolvedConfig.unit
+            ? '<div class="burned-legend-unit">' + resolvedConfig.unit + "</div>"
+            : "";
+
         div.innerHTML =
-            '<div class="burned-legend-title">' + (legendConfig.title || "Burned Area Intensity") + "</div>" +
+            '<div class="burned-legend-title">' + (resolvedConfig.title || "") + "</div>" +
+            unitMarkup +
             '<div class="burned-legend-scale" style="background:linear-gradient(90deg, ' + colors.join(", ") + ');"></div>' +
             '<div class="burned-legend-labels"><span>' +
-            (legendConfig.min_label || "Low") +
+            (resolvedConfig.min_label || "") +
             "</span><span>" +
-            (legendConfig.max_label || "High") +
+            (resolvedConfig.max_label || "") +
             "</span></div>";
         return div;
     };
 
-    burnedAreaLegend.addTo(map);
+    control.addTo(map);
     window.setTimeout(function () {
-        var element = burnedAreaLegend && burnedAreaLegend.getContainer ? burnedAreaLegend.getContainer() : null;
+        var element = control && control.getContainer ? control.getContainer() : null;
         if (element) {
             element.classList.add("is-visible");
         }
     }, 20);
+
+    return control;
 }
 
 function syncBurnedAreaOverlay() {
     removeBurnedAreaOverlay();
+
+    if (!hasSelectedResultVariable("burned_area")) {
+        return;
+    }
 
     if (!burnedAreaOverlayData || !burnedOverlayToggle || !burnedOverlayToggle.checked || !hasCompletedAnalysis) {
         return;
@@ -990,6 +1250,46 @@ function syncBurnedAreaOverlay() {
     }
 }
 
+function syncTemperatureOverlay() {
+    // Temperature uses its own overlay state so it can be toggled independently.
+    removeTemperatureOverlay();
+
+    if (!hasSelectedResultVariable("temperature")) {
+        return;
+    }
+
+    if (!temperatureOverlayData || !temperatureOverlayToggle || !temperatureOverlayToggle.checked || !hasCompletedAnalysis) {
+        return;
+    }
+
+    if (!temperatureOverlayData.image_url || !temperatureOverlayData.bounds) {
+        return;
+    }
+
+    temperatureOverlay = L.imageOverlay(
+        temperatureOverlayData.image_url,
+        temperatureOverlayData.bounds,
+        {
+            opacity: 0,
+            interactive: false,
+            crossOrigin: true,
+            className: "burned-area-overlay"
+        }
+    );
+
+    temperatureOverlay.once("load", function () {
+        temperatureOverlay.setOpacity(temperatureOverlayData.opacity || 0.66);
+    });
+
+    temperatureOverlay.addTo(map);
+    if (temperatureOverlayData.has_temperature_data && temperatureOverlayData.legend) {
+        var legendConfig = Object.assign({}, temperatureOverlayData.legend, {
+            has_data: temperatureOverlayData.has_temperature_data
+        });
+        addTemperatureLegend(legendConfig);
+    }
+}
+
 function resetResults(shouldInvalidateRequest) {
     if (shouldInvalidateRequest !== false) {
         currentRequestId += 1;
@@ -998,12 +1298,14 @@ function resetResults(shouldInvalidateRequest) {
     currentResults = [];
     hasCompletedAnalysis = false;
     burnedAreaOverlayData = null;
+    temperatureOverlayData = null;
     lakesGeoJsonData = null;
     removeBurnedAreaOverlay();
+    removeTemperatureOverlay();
     removeLandcoverLegend();
     removeLakesLayer();
     tableContainer.innerHTML = '<p class="placeholder">Results will appear here.</p>';
-    updateSummary([]);
+    updateSummary([], getSelectedResultVariables());
     updateLakeSummary(null);
 
     if (resultsChart) {
@@ -1015,23 +1317,31 @@ function resetResults(shouldInvalidateRequest) {
     setResetButtonVisible(false);
     updateQuickStats(null);
     setResultsPanelOpen(false);
+    applySelectedResultVariableView({
+        hasResults: false,
+        syncOverlays: false
+    });
 }
 
-function renderResults(data, overlay, lakesData, summary) {
+function renderResults(data, overlay, temperatureOverlayPayload, lakesData, summary, requestedVariables) {
     currentResults = data.slice();
     hasCompletedAnalysis = true;
     burnedAreaOverlayData = overlay || null;
+    temperatureOverlayData = temperatureOverlayPayload || null;
     lakesGeoJsonData = lakesData || null;
+    lastRequestedVariables = requestedVariables && requestedVariables.length
+        ? requestedVariables.slice()
+        : getSelectedResultVariables();
     setResetButtonVisible(true);
-    syncBurnedAreaOverlay();
     syncLakesLayer();
     syncLandcoverLegend();
     animateResultsShell();
     logLandCoverValues(data);
-    updateSummary(data);
     updateLakeSummary(summary || null);
-    renderChart(data);
-    renderTable(data);
+    applySelectedResultVariableView({
+        hasResults: true,
+        syncOverlays: true
+    });
     updateQuickStats(data.length);
     setResultsPanelOpen(true);
 }
@@ -1062,10 +1372,23 @@ function exportResultsAsCsv() {
         return;
     }
 
+    var selectedVariables = getSelectedResultVariables();
     var exportRows = currentResults.map(function (row) {
-        var formattedRow = Object.assign({}, row);
-        if (formattedRow.land_cover !== undefined && formattedRow.land_cover !== null && formattedRow.land_cover !== "") {
-            formattedRow.land_cover = getLandCoverLabel(formattedRow.land_cover);
+        var formattedRow = {
+            catchment_id: row.catchment_id,
+            date: row.date
+        };
+
+        if (hasSelectedResultVariable("burned_area", selectedVariables)) {
+            formattedRow.burned_area = row.burned_area;
+        }
+
+        if (hasSelectedResultVariable("rainfall", selectedVariables)) {
+            formattedRow.rainfall = row.rainfall;
+        }
+
+        if (hasSelectedResultVariable("temperature", selectedVariables)) {
+            formattedRow.temperature = row.temperature;
         }
         return formattedRow;
     });
@@ -1202,9 +1525,42 @@ function handleDateChange() {
     setStatus("Dates changed. Run analysis to load updated results.", false);
 }
 
+function handleResultVariableChange(event) {
+    if (!enforceResultVariableSelection(event && event.target ? event.target : null)) {
+        updateRunButtonState();
+        return;
+    }
+
+    updateRunButtonState();
+    applySelectedResultVariableView({
+        hasResults: hasCompletedAnalysis,
+        syncOverlays: true
+    });
+
+    if (!hasCompletedAnalysis) {
+        setStatus("Result variables updated. Run analysis to load matching results.", false);
+        return;
+    }
+
+    var selectedVariables = getSelectedResultVariables();
+    var hasNewRequestedVariable = selectedVariables.some(function (variableKey) {
+        return lastRequestedVariables.indexOf(variableKey) === -1;
+    });
+
+    if (hasNewRequestedVariable) {
+        setStatus("Result variables updated. Run analysis again to load newly added overlays.", false);
+        return;
+    }
+
+    setStatus("Result variables updated.", false);
+}
+
 catchmentSelect.addEventListener("change", handleFilterChange);
 startDateInput.addEventListener("change", handleDateChange);
 endDateInput.addEventListener("change", handleDateChange);
+resultVariableInputs.forEach(function (input) {
+    input.addEventListener("change", handleResultVariableChange);
+});
 
 if (burnedOverlayToggle) {
     burnedOverlayToggle.addEventListener("change", syncBurnedAreaOverlay);
@@ -1212,6 +1568,10 @@ if (burnedOverlayToggle) {
 
 if (lakesLayerToggle) {
     lakesLayerToggle.addEventListener("change", syncLakesLayer);
+}
+
+if (temperatureOverlayToggle) {
+    temperatureOverlayToggle.addEventListener("change", syncTemperatureOverlay);
 }
 
 if (resetAnalysisButton) {
@@ -1222,6 +1582,7 @@ runButton.addEventListener("click", function () {
     var id = selectedLakeCatchmentId || catchmentSelect.value;
     var start = startDateInput.value;
     var end = endDateInput.value;
+    var selectedVariables = getSelectedResultVariables();
     var requestId = currentRequestId + 1;
 
     if (!selectedLakeId) {
@@ -1234,13 +1595,20 @@ runButton.addEventListener("click", function () {
         return;
     }
 
+    if (!selectedVariables.length) {
+        setStatus("Select at least one result variable.", true);
+        return;
+    }
+
     currentRequestId = requestId;
     setLoadingState(true);
     hasCompletedAnalysis = false;
     setResetButtonVisible(false);
     burnedAreaOverlayData = null;
+    temperatureOverlayData = null;
     lakesGeoJsonData = null;
     removeBurnedAreaOverlay();
+    removeTemperatureOverlay();
     removeLakesLayer();
     updateQuickStats(null);
     setStatus("Loading analysis results...", false);
@@ -1249,7 +1617,8 @@ runButton.addEventListener("click", function () {
     var queryUrl = "http://127.0.0.1:5000/query?" + new URLSearchParams({
         catchment_id: id,
         start_date: start,
-        end_date: end
+        end_date: end,
+        variables: selectedVariables.join(",")
     }).toString();
 
     Promise.all([
@@ -1289,9 +1658,11 @@ runButton.addEventListener("click", function () {
             var lakesData = responses[1];
             var records = Array.isArray(payload) ? payload : (payload.records || []);
             var overlay = Array.isArray(payload) ? null : payload.overlay;
+            var temperatureOverlayPayload = Array.isArray(payload) ? null : payload.temperature_overlay;
+            var requestedVariables = Array.isArray(payload) ? selectedVariables : (payload.selected_variables || selectedVariables);
             var summary = Array.isArray(payload) ? null : payload.summary;
 
-            renderResults(records, overlay, lakesData, summary);
+            renderResults(records, overlay, temperatureOverlayPayload, lakesData, summary, requestedVariables);
             exportButton.disabled = !records.length;
             highlightCatchment(id);
             setStatus("Analysis complete.", false);
@@ -1361,6 +1732,10 @@ setControlsCollapsed(false);
 setResultsPanelOpen(false);
 setSelectedLakeDisplay(null);
 updateRunButtonState();
+applySelectedResultVariableView({
+    hasResults: false,
+    syncOverlays: false
+});
 updateQuickStats(null);
 loadCatchmentsGeoJSON();
 loadLakesOverview().catch(function (error) {

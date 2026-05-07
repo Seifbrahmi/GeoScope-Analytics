@@ -355,6 +355,14 @@ input:focus {
     accent-color: var(--warm);
 }
 
+.toggle-row.is-disabled {
+    opacity: 0.56;
+}
+
+.toggle-row.is-disabled span {
+    color: var(--text-soft);
+}
+
 .selection-meta {
     display: grid;
     gap: 4px;
@@ -377,6 +385,11 @@ input:focus {
     font-weight: 700;
     line-height: 1.3;
     overflow-wrap: anywhere;
+}
+
+.result-variable-group {
+    display: grid;
+    gap: 8px;
 }
 
 .status-card {
@@ -596,6 +609,10 @@ input:focus {
     text-overflow: ellipsis;
 }
 
+.kpi-card.is-hidden {
+    display: none;
+}
+
 .insight-copy {
     margin: 10px 2px 0;
     color: var(--text-soft);
@@ -749,6 +766,15 @@ tbody tr:last-child td {
     line-height: 1.2;
 }
 
+.burned-legend-unit {
+    margin-bottom: 8px;
+    color: #64748b;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
 .burned-legend-scale {
     width: 100%;
     height: 13px;
@@ -768,6 +794,20 @@ tbody tr:last-child td {
     font-weight: 800;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+}
+
+.temperature-legend .burned-legend-title {
+    color: #1e3a8a;
+}
+
+.temperature-legend .burned-legend-scale {
+    box-shadow:
+        inset 0 0 0 1px rgba(30, 58, 138, 0.1),
+        inset 0 1px 3px rgba(255, 255, 255, 0.36);
+}
+
+.temperature-legend .burned-legend-labels {
+    color: #1d4ed8;
 }
 
 .landcover-legend {
@@ -931,6 +971,12 @@ tbody tr:last-child td {
 }
 
 @media (max-width: 760px) {
+    .burned-legend,
+    .landcover-legend {
+        min-width: 154px;
+        max-width: 196px;
+    }
+
     .control-panel {
         width: min(304px, calc(100vw - 24px));
     }
@@ -977,6 +1023,24 @@ tbody tr:last-child td {
 }
 
 @media (max-width: 560px) {
+    .burned-legend,
+    .landcover-legend {
+        min-width: 138px;
+        max-width: 178px;
+        padding: 10px 11px;
+    }
+
+    .burned-legend-title,
+    .landcover-legend-title {
+        font-size: 0.74rem;
+    }
+
+    .burned-legend-unit,
+    .burned-legend-labels,
+    .landcover-legend-label {
+        font-size: 0.66rem;
+    }
+
     .app-brand {
         left: 52px;
         width: min(190px, calc(100vw - 64px));

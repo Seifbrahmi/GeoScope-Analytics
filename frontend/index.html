@@ -58,6 +58,25 @@
                     <input id="end-date" type="date">
                 </div>
 
+                <div class="result-variable-group" aria-label="Data to Display">
+                    <span class="selection-meta-label">Data to Display</span>
+
+                    <label class="toggle-row" for="result-variable-temperature">
+                        <input id="result-variable-temperature" type="checkbox" name="result-variable" value="temperature" checked>
+                        <span>Temperature</span>
+                    </label>
+
+                    <label class="toggle-row" for="result-variable-rainfall">
+                        <input id="result-variable-rainfall" type="checkbox" name="result-variable" value="rainfall" checked>
+                        <span>Rainfall</span>
+                    </label>
+
+                    <label class="toggle-row" for="result-variable-burned">
+                        <input id="result-variable-burned" type="checkbox" name="result-variable" value="burned_area" checked>
+                        <span>FireCCI / Burned Area</span>
+                    </label>
+                </div>
+
                 <button id="run-analysis" class="run-button" type="button">Run Analysis</button>
                 <button id="reset-analysis" class="reset-button is-hidden" type="button">Reset Analysis</button>
 
@@ -69,6 +88,11 @@
                 <label class="toggle-row" for="toggle-lakes-layer">
                     <input id="toggle-lakes-layer" type="checkbox" checked>
                     <span>Show lakes</span>
+                </label>
+
+                <label class="toggle-row" for="toggle-temperature-overlay">
+                    <input id="toggle-temperature-overlay" type="checkbox" checked>
+                    <span>Show temperature overlay</span>
                 </label>
 
                 <div class="status-card">
@@ -114,13 +138,17 @@
 
             <div class="results-overview">
                 <div class="kpi-grid">
-                    <article class="kpi-card">
+                    <article class="kpi-card" data-variable-card="burned_area">
                         <span class="kpi-label">Avg Burned Area (ha)</span>
                         <strong id="avg-burned-area">--</strong>
                     </article>
-                    <article class="kpi-card">
+                    <article class="kpi-card" data-variable-card="rainfall">
                         <span class="kpi-label">Average Rainfall (mm)</span>
                         <strong id="avg-rainfall">--</strong>
+                    </article>
+                    <article class="kpi-card" data-variable-card="temperature">
+                        <span class="kpi-label">Average Temperature (&deg;C)</span>
+                        <strong id="avg-temperature">--</strong>
                     </article>
                     <article class="kpi-card">
                         <span class="kpi-label">Land Cover</span>
